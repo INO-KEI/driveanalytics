@@ -66,7 +66,24 @@ class SensorManager {
     // 加速度センサーの開始
     startAccelerationTracking() {
         if (window.DeviceMotionEvent) {
-            window.addEventListener('devicemotion', this.handleMotionEvent.bind(this));
+            // iOS 13+用の許可要求
+            if (typeof DeviceMotionEvent.requestPermission === 'function') {
+                console.log('iOS 13+ デバイスを検出: 加速度センサー許可が必要です');
+                DeviceMotionEvent.requestPermission()
+                    .then(permissionState => {
+                        if (permissionState === 'granted') {
+                            console.log('加速度センサー許可が付与されました');
+                            window.addEventListener('devicemotion', this.handleMotionEvent.bind(this));
+                        } else {
+                            console.error('加速度センサー許可が拒否されました:', permissionState);
+                        }
+                    })
+                    .catch(console.error);
+            } else {
+                // iOS 13以前またはAndroidなど、許可が必要ないデバイス
+                console.log('標準デバイスを検出: 加速度センサーイベントを登録します');
+                window.addEventListener('devicemotion', this.handleMotionEvent.bind(this));
+            }
         } else {
             console.error('Device motion is not supported by this browser.');
         }
@@ -77,7 +94,13 @@ class SensorManager {
         if (!this.isRecording) return;
         
         const acceleration = event.accelerationIncludingGravity;
-        if (!acceleration) return;
+        if (!acceleration) {
+            console.error('加速度データが取得できません:', event);
+            return;
+        }
+        
+        // デバッグログ
+        console.log('加速度データ:', acceleration);
         
         this.accelerationData.x = acceleration.x || 0;
         this.accelerationData.y = acceleration.y || 0;
@@ -89,6 +112,8 @@ class SensorManager {
             Math.pow(this.accelerationData.y, 2) +
             Math.pow(this.accelerationData.z, 2)
         );
+        
+        console.log('振動強度:', magnitude);
         
         this.accelerationData.magnitude = magnitude;
         this.notifyListeners('acceleration', this.accelerationData);

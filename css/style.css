@@ -87,4 +87,28 @@ button:disabled {
     .sensor-box {
         flex: 1 1 auto;
     }
+}
+
+/* 振動レベル表示のスタイル */
+.level-low {
+    color: green;
+    font-weight: bold;
+}
+
+.level-medium {
+    color: orange;
+    font-weight: bold;
+}
+
+.level-high {
+    color: red;
+    font-weight: bold;
+}
+
+.level-error {
+    color: #ff0000;
+    background-color: #ffeeee;
+    padding: 4px;
+    border-radius: 4px;
+    font-weight: bold;
 } 

@@ -85,17 +85,32 @@ class UIManager {
     updateAccelerationUI(data) {
         this.accelerationElement.textContent = `X: ${data.x.toFixed(2)}, Y: ${data.y.toFixed(2)}, Z: ${data.z.toFixed(2)}`;
         
-        // 振動レベルの表示（簡易版）
+        // 振動レベルの表示（改善版）
         let level = '低';
+        let className = 'level-low';
         let magnitude = data.magnitude || 0;
         
         if (magnitude > 15) {
             level = '高';
+            className = 'level-high';
         } else if (magnitude > 10) {
             level = '中';
+            className = 'level-medium';
+        }
+        
+        // 振動データが取得できていない場合の処理
+        if (magnitude === 0 && data.x === 0 && data.y === 0 && data.z === 0) {
+            level = '計測不能';
+            className = 'level-error';
+            console.warn('振動データが取得できていません。デバイスの加速度センサーを確認してください。');
         }
         
         this.vibrationLevelElement.textContent = `レベル: ${level} (${magnitude.toFixed(2)})`;
+        
+        // クラスをリセットして新しいクラスを適用
+        this.vibrationLevelElement.className = '';
+        this.vibrationLevelElement.classList.add(className);
+        
         this.addLogEntry(`振動: ${level} (${magnitude.toFixed(2)})`);
     }
     
