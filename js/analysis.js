@@ -225,6 +225,13 @@
         };
     }
 
+    // 上下RMSと水平面RMSの合成（二乗和平方根）。エンジン・路面の3軸揺れを1つの大きさにする
+    function combineVibrationRms(vertRms, horizRms) {
+        const v = vertRms || 0;
+        const h = horizRms || 0;
+        return Math.sqrt(v * v + h * h);
+    }
+
     // ISO 2631-1 の快適区分を簡易適用（車内スマホは目安）
     function comfortFromVibration(rms, freqHz) {
         let weighted = rms;
@@ -335,6 +342,7 @@
                 'distance_m',
                 'rms_ms2',
                 'shake_ms2',
+                'combined_rms_ms2',
                 'lateral_g',
                 'freq_hz',
                 'comfort',
@@ -361,6 +369,7 @@
                 numCell(point.distanceM, 1),
                 numCell(point.rms, 3),
                 numCell(point.shake, 3),
+                numCell(point.combinedRms, 3),
                 numCell(point.lateralG, 3),
                 numCell(point.freq, 2),
                 csvCell(point.voice ? '音声除外' : (point.comfort || '')),
@@ -389,6 +398,7 @@
         speechLikelihood,
         quietnessScore,
         dominantFrequency,
+        combineVibrationRms,
         comfortFromVibration,
         heatColor,
         noiseColor,

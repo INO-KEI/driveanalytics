@@ -9,6 +9,7 @@ class NervCharts {
         this.hud = {
             speed: document.getElementById('hud-speed'),
             motion: document.getElementById('hud-motion'),
+            comfort: document.getElementById('hud-comfort'),
             noise: document.getElementById('hud-noise')
         };
         this.history = [];
@@ -28,11 +29,17 @@ class NervCharts {
             speed: 0,
             rms: 0,
             shake: 0,
-            lateralG: 0,
+            combinedRms: 0,
+            freq: 0,
+            comfort: '',
+            comfortClass: '',
             dbfs: -50,
             quietness: null,
             voice: false,
-            calibrated: false
+            calibrated: false,
+            engineDb: -50,
+            roadDb: -50,
+            windDb: -50
         };
     }
 
@@ -67,12 +74,19 @@ class NervCharts {
             this.hud.speed.textContent = `${(s.speed || 0).toFixed(0)} km/h`;
         }
         if (this.hud.motion) {
+            const hz = s.freq ? `${s.freq.toFixed(1)}Hz` : '--Hz';
             this.hud.motion.textContent =
-                `VIB ${(s.rms || 0).toFixed(2)}  LAT ${Math.abs(s.lateralG || 0).toFixed(2)}G`;
+                `Σ ${(s.combinedRms || 0).toFixed(2)}  ${hz}`;
+        }
+        if (this.hud.comfort) {
+            const label = s.comfort || '--';
+            this.hud.comfort.textContent = label;
+            this.hud.comfort.className = `hud-push comfort-chip ${s.comfortClass || ''}`;
         }
         if (this.hud.noise) {
             const q = s.quietness == null ? '--' : String(s.quietness);
-            this.hud.noise.textContent = `${(s.dbfs || 0).toFixed(0)} dB  Q ${q}`;
+            this.hud.noise.textContent =
+                `${(s.dbfs || 0).toFixed(0)}  E${(s.engineDb || 0).toFixed(0)} R${(s.roadDb || 0).toFixed(0)} W${(s.windDb || 0).toFixed(0)}  Q${q}`;
         }
     }
 
@@ -212,6 +226,56 @@ class NervCharts {
         ctx.fillText(text, x, y);
     }
 
+    comfortFill(cls) {
+        if (cls === 'comfort-good') {
+            return 'rgba(57, 255, 80, 0.22)';
+        }
+        if (cls === 'comfort-mid') {
+            return 'rgba(255, 210, 0, 0.22)';
+        }
+        if (cls === 'comfort-bad') {
+            return 'rgba(255, 122, 24, 0.22)';
+        }
+        if (cls === 'comfort-extreme') {
+            return 'rgba(255, 59, 48, 0.22)';
+        }
+        return 'rgba(255, 210, 0, 0.22)';
+    }
+
+    comfortStroke(cls) {
+        if (cls === 'comfort-good') {
+            return '#39ff50';
+        }
+        if (cls === 'comfort-mid') {
+            return '#ffd200';
+        }
+        if (cls === 'comfort-bad') {
+            return '#ff7a18';
+        }
+        if (cls === 'comfort-extreme') {
+            return '#ff3b30';
+        }
+        return '#ffd200';
+    }
+
+    drawComfortSegments(ctx, pts, now, w, h, maxRms) {
+        if (pts.length < 2) {
+            return;
+        }
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.lineWidth = 2.6;
+        for (let i = 1; i < pts.length; i++) {
+            const a = pts[i - 1];
+            const b = pts[i];
+            ctx.beginPath();
+            ctx.moveTo(this.axisX(a.t, now, w), this.yOf(a.combinedRms || 0, 0, maxRms, h));
+            ctx.lineTo(this.axisX(b.t, now, w), this.yOf(b.combinedRms || 0, 0, maxRms, h));
+            ctx.strokeStyle = this.comfortStroke(b.comfortClass);
+            ctx.stroke();
+        }
+    }
+
     drawSpeed() {
         const canvas = this.canvases.speed;
         if (!canvas) {
@@ -251,62 +315,55 @@ class NervCharts {
         this.drawFrame(ctx, w, h);
         const now = performance.now();
         const pts = this.history;
-        const maxRms = Math.max(1.2, ...pts.map((p) => Math.max(p.rms || 0, p.shake || 0)));
-        const maxG = Math.max(0.45, ...pts.map((p) => Math.abs(p.lateralG || 0)));
+        const maxRms = Math.max(
+            1.2,
+            ...pts.map((p) => Math.max(p.combinedRms || 0, p.rms || 0, p.shake || 0))
+        );
 
-        // 振動の体感ゾーン（下ほど穏やか）
         const comfortY = this.yOf(0.315, 0, maxRms, h);
-        ctx.fillStyle = 'rgba(57, 255, 80, 0.06)';
+        ctx.fillStyle = 'rgba(57, 255, 80, 0.07)';
         ctx.fillRect(0, comfortY, w, h - comfortY);
-        ctx.fillStyle = 'rgba(255, 59, 48, 0.08)';
-        ctx.fillRect(0, 0, w, this.yOf(0.8, 0, maxRms, h));
+        ctx.fillStyle = 'rgba(255, 122, 24, 0.08)';
+        ctx.fillRect(0, this.yOf(0.63, 0, maxRms, h), w, this.yOf(0.315, 0, maxRms, h) - this.yOf(0.63, 0, maxRms, h));
+        ctx.fillStyle = 'rgba(255, 59, 48, 0.10)';
+        ctx.fillRect(0, 0, w, this.yOf(0.63, 0, maxRms, h));
 
+        this.label(ctx, '快適', 6, Math.min(h - 6, comfortY - 3), 'rgba(57,255,80,0.55)');
+        this.label(ctx, '不快', 6, Math.max(14, this.yOf(0.63, 0, maxRms, h) + 11), 'rgba(255,59,48,0.55)');
+
+        const last = pts[pts.length - 1] || this.snapshot;
         this.fillToBaseline(
             ctx, pts, now, w, h,
-            (p) => p.rms || 0, 0, maxRms,
-            'rgba(255, 210, 0, 0.28)', 0
+            (p) => p.combinedRms || 0, 0, maxRms,
+            this.comfortFill(last.comfortClass), 0
         );
         this.strokeLine(
             ctx, pts, now, w, h,
             (p) => p.rms || 0, 0, maxRms,
-            '#ffd200', 2.2
+            'rgba(255, 243, 214, 0.85)', 1.5
         );
+        this.strokeLine(
+            ctx, pts, now, w, h,
+            (p) => p.shake || 0, 0, maxRms,
+            '#ff7a18', 1.5
+        );
+        this.drawComfortSegments(ctx, pts, now, w, h, maxRms);
 
-        // 横Gは中央ゼロの波形。左右の振れが一目で分かる
-        const mid = h / 2;
-        ctx.strokeStyle = 'rgba(255, 59, 48, 0.35)';
-        ctx.setLineDash([4, 5]);
-        ctx.beginPath();
-        ctx.moveTo(0, mid);
-        ctx.lineTo(w, mid);
-        ctx.stroke();
+        const maxHz = Math.max(16, ...pts.map((p) => p.freq || 0));
+        ctx.setLineDash([5, 4]);
+        this.strokeLine(
+            ctx, pts, now, w, h,
+            (p) => p.freq || 0, 0, maxHz,
+            'rgba(199, 125, 255, 0.95)', 1.7
+        );
         ctx.setLineDash([]);
+        this.label(ctx, `${maxHz.toFixed(0)}Hz`, w - 40, h - 6, 'rgba(199,125,255,0.75)');
 
-        if (pts.length >= 2) {
-            ctx.beginPath();
-            pts.forEach((p, i) => {
-                const x = this.axisX(p.t, now, w);
-                const y = mid - ((p.lateralG || 0) / maxG) * (h * 0.42);
-                if (i === 0) {
-                    ctx.moveTo(x, y);
-                } else {
-                    ctx.lineTo(x, y);
-                }
-            });
-            ctx.strokeStyle = '#ff3b30';
-            ctx.lineWidth = 2.4;
-            ctx.stroke();
-
-            ctx.lineTo(this.axisX(pts[pts.length - 1].t, now, w), mid);
-            ctx.lineTo(this.axisX(pts[0].t, now, w), mid);
-            ctx.closePath();
-            ctx.fillStyle = 'rgba(255, 59, 48, 0.16)';
-            ctx.fill();
-        }
-
-        this.glowLast(ctx, pts, now, w, h, (p) => p.rms || 0, 0, maxRms, '#ffd200');
-        this.label(ctx, 'VIB', 6, 14, 'rgba(255,210,0,0.8)');
-        this.label(ctx, 'LAT G', w - 48, 14, 'rgba(255,59,48,0.85)');
+        this.glowLast(
+            ctx, pts, now, w, h,
+            (p) => p.combinedRms || 0, 0, maxRms,
+            this.comfortStroke(last.comfortClass)
+        );
     }
 
     drawNoise() {
@@ -329,27 +386,17 @@ class NervCharts {
             ctx, pts, now, w, h,
             (p) => p.quietness == null ? 0 : p.quietness,
             0, 100,
-            'rgba(57, 255, 80, 0.20)', 0
-        );
-        this.strokeLine(
-            ctx, pts, now, w, h,
-            (p) => p.quietness == null ? 0 : p.quietness,
-            0, 100,
-            'rgba(57, 255, 80, 0.85)', 1.6
+            'rgba(57, 255, 80, 0.14)', 0
         );
 
-        this.fillToBaseline(
-            ctx, pts, now, w, h,
-            (p) => p.dbfs == null ? yMin : p.dbfs,
-            yMin, yMax,
-            'rgba(0, 229, 255, 0.14)', yMin
-        );
-        this.strokeLine(
-            ctx, pts, now, w, h,
-            (p) => p.dbfs == null ? yMin : p.dbfs,
-            yMin, yMax,
-            '#00e5ff', 2.4
-        );
+        const dbOf = (key) => (p) => {
+            const v = p[key];
+            return typeof v === 'number' ? v : yMin;
+        };
+        this.strokeLine(ctx, pts, now, w, h, dbOf('engineDb'), yMin, yMax, '#d47bff', 1.8);
+        this.strokeLine(ctx, pts, now, w, h, dbOf('roadDb'), yMin, yMax, '#ff7a18', 1.8);
+        this.strokeLine(ctx, pts, now, w, h, dbOf('windDb'), yMin, yMax, '#ffe14d', 1.8);
+        this.strokeLine(ctx, pts, now, w, h, dbOf('dbfs'), yMin, yMax, '#00e5ff', 2.5);
 
         pts.forEach((p) => {
             if (!p.voice) {

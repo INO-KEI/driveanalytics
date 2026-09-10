@@ -268,15 +268,45 @@ button:disabled {
 
 .lg-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
 .lg-yellow { background: #ffd200; box-shadow: 0 0 6px #ffd200; }
+.lg-vert { background: #fff3d6; box-shadow: 0 0 6px #fff3d6; }
+.lg-horiz { background: var(--orange); box-shadow: 0 0 6px var(--orange); }
 .lg-red { background: var(--red); box-shadow: 0 0 6px var(--red); }
 .lg-cyan { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+.lg-engine { background: #d47bff; box-shadow: 0 0 6px #d47bff; }
+.lg-road { background: var(--orange); box-shadow: 0 0 6px var(--orange); }
+.lg-wind { background: #ffe14d; box-shadow: 0 0 6px #ffe14d; }
+
+.lg-freq { background: #c77dff; box-shadow: 0 0 6px #c77dff; }
 
 .graph-hud b {
-    margin-left: auto;
+    margin-left: 0.35rem;
     font-size: 0.72rem;
     color: var(--green);
     font-weight: 700;
     white-space: nowrap;
+}
+
+.graph-hud .hud-push {
+    margin-left: auto;
+}
+
+.comfort-chip {
+    padding: 0 0.35rem;
+    border: 1px solid var(--muted);
+    color: var(--muted);
+}
+.comfort-chip.comfort-good {
+    color: var(--green);
+    border-color: var(--green);
+}
+.comfort-chip.comfort-mid {
+    color: #ffd200;
+    border-color: #ffd200;
+}
+.comfort-chip.comfort-bad,
+.comfort-chip.comfort-extreme {
+    color: var(--red);
+    border-color: var(--red);
 }
 
 #hud-motion { color: #ffd200; }
@@ -494,8 +524,46 @@ button:disabled {
     .graph-stack { flex: 1 1 0; }
 }
 
-@media (max-width: 899px) {
+@media (max-width: 899px) and (orientation: portrait) {
     .map-panel { flex: 1.05 1 0; }
     .graph-stack { flex: 1.15 1 0; }
+    .hdr-sys { display: none; }
+}
+
+/* スマホ横画面：地図を左、グラフを右に積む（横長の帯にしない） */
+@media (orientation: landscape) and (max-height: 560px) {
+    header {
+        height: calc(28px + env(safe-area-inset-left, 0px) / 8);
+        min-height: 28px;
+        padding-left: max(8px, env(safe-area-inset-left, 0px));
+        padding-right: max(6px, env(safe-area-inset-right, 0px));
+    }
+    #cockpit {
+        flex-direction: row;
+        height: calc(100dvh - 28px);
+        padding: 2px;
+        gap: 2px;
+        padding-left: max(2px, env(safe-area-inset-left, 0px));
+        padding-right: max(2px, env(safe-area-inset-right, 0px));
+    }
+    .map-panel {
+        flex: 1.05 1 0;
+        min-width: 0;
+    }
+    .graph-stack {
+        flex: 1 1 0;
+        min-width: 0;
+        gap: 2px;
+    }
+    .graph-title {
+        display: none;
+    }
+    .graph-hud {
+        min-height: 16px;
+        gap: 0.22rem;
+    }
+    .graph-hud b {
+        font-size: 0.64rem;
+    }
     .hdr-sys { display: none; }
 }

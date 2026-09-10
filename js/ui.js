@@ -21,6 +21,7 @@ class UIManager {
         this.durationElement = document.getElementById('duration');
         this.accelerationElement = document.getElementById('acceleration');
         this.vibrationLevelElement = document.getElementById('vibration-level');
+        this.vibrationCombinedElement = document.getElementById('vibration-combined');
         this.vibrationFreqElement = document.getElementById('vibration-freq');
         this.comfortElement = document.getElementById('comfort');
         this.lateralElement = document.getElementById('lateral-g');
@@ -102,6 +103,16 @@ class UIManager {
             }
         });
         observer.observe(cockpit);
+        window.addEventListener('orientationchange', () => {
+            setTimeout(() => {
+                if (this.map) {
+                    this.map.invalidateSize();
+                }
+                if (this.charts) {
+                    this.charts.fitCanvases();
+                }
+            }, 250);
+        });
     }
 
     pushChart(partial) {
@@ -118,7 +129,7 @@ class UIManager {
         this.spotLayer = L.layerGroup().addTo(this.map);
         this.polyline = L.polyline([], {
             color: '#ff7a18',
-            weight: 4,
+            weight: 3,
             opacity: 0.9
         }).addTo(this.map);
         setTimeout(() => this.map.invalidateSize(), 200);
@@ -365,9 +376,9 @@ class UIManager {
             this.marker.setLatLng(latlng);
         } else {
             this.marker = L.circleMarker(latlng, {
-                radius: 7,
+                radius: 5,
                 color: '#ff7a18',
-                weight: 2,
+                weight: 1.5,
                 fillColor: '#39ff50',
                 fillOpacity: 0.95
             }).addTo(this.map);
@@ -382,27 +393,39 @@ class UIManager {
         this.accelerationElement.textContent =
             `上下: ${data.vertical.toFixed(2)} 横揺れ: ${data.horizontal.toFixed(2)} m/s²`;
 
-        const hasSignal = Math.abs(data.vertical) > 0.01 || Math.abs(data.horizontal) > 0.01 || data.rms > 0.01;
+        const hasSignal = Math.abs(data.vertical) > 0.01 || Math.abs(data.horizontal) > 0.01 || data.rms > 0.01 || data.shake > 0.01;
         if (!hasSignal && data.x === 0 && data.y === 0 && data.z === 0) {
             this.vibrationLevelElement.textContent = '振幅: 計測不能';
             this.vibrationLevelElement.className = 'level-error';
+            if (this.vibrationCombinedElement) {
+                this.vibrationCombinedElement.textContent = '合成 RMS: 計測不能';
+                this.vibrationCombinedElement.className = 'level-error';
+            }
             this.comfortElement.textContent = '判定: 計測不能';
             this.comfortElement.className = 'level-error';
             return;
         }
 
+        if (this.vibrationCombinedElement) {
+            this.vibrationCombinedElement.textContent =
+                `合成 RMS: ${(data.combinedRms || 0).toFixed(2)} m/s²（上下と横揺れの二乗和平方根）`;
+            this.vibrationCombinedElement.className = data.comfortClass || '';
+        }
         this.vibrationLevelElement.textContent =
-            `振幅 RMS: ${(data.rms || 0).toFixed(2)} m/s²（振れ幅 ${(data.peak || 0).toFixed(2)}）`;
+            `上下 RMS: ${(data.rms || 0).toFixed(2)} m/s²（振れ幅 ${(data.peak || 0).toFixed(2)}）`;
         this.vibrationLevelElement.className = data.comfortClass || '';
         this.vibrationFreqElement.textContent = `卓越周波数: ${(data.freq || 0).toFixed(1)} Hz`;
         this.comfortElement.textContent = `判定: ${data.comfort}`;
         this.comfortElement.className = data.comfortClass || '';
         this.lateralElement.textContent = `横G（コーナリング）: ${Math.abs(data.lateralG || 0).toFixed(2)} G`;
-        this.shakeElement.textContent = `横揺れ: ${(data.shake || 0).toFixed(2)} m/s²`;
+        this.shakeElement.textContent = `横揺れ RMS: ${(data.shake || 0).toFixed(2)} m/s²`;
         this.pushChart({
             rms: data.rms || 0,
             shake: data.shake || 0,
-            lateralG: data.lateralG || 0
+            combinedRms: data.combinedRms || 0,
+            freq: data.freq || 0,
+            comfort: data.comfort || '',
+            comfortClass: data.comfortClass || ''
         });
     }
 
@@ -426,7 +449,10 @@ class UIManager {
             dbfs: data.dbfs,
             quietness: data.quietness,
             voice: data.voiceDetected,
-            calibrated: data.calibrated
+            calibrated: data.calibrated,
+            engineDb: data.engineDb,
+            roadDb: data.roadDb,
+            windDb: data.windDb
         });
     }
 
@@ -465,7 +491,7 @@ class UIManager {
     addSpot(point) {
         const color = this.spotColor(point);
         const circle = L.circleMarker([point.latitude, point.longitude], {
-            radius: 8,
+            radius: 5,
             color: '#222',
             weight: 1,
             fillColor: color,

@@ -23,7 +23,8 @@ class SensorManager {
             comfort: '計測待機',
             comfortClass: '',
             lateralG: 0,
-            shake: 0
+            shake: 0,
+            combinedRms: 0
         };
         this.noiseData = {
             dbfs: -100,
@@ -279,7 +280,8 @@ class SensorManager {
 
         const vib = this.A.dominantFrequency(this.vertSamples, sampleRate);
         const shakeRms = this.rms(this.horizSamples);
-        const comfort = this.A.comfortFromVibration(vib.rms, vib.freq);
+        const combinedRms = this.A.combineVibrationRms(vib.rms, shakeRms);
+        const comfort = this.A.comfortFromVibration(combinedRms, vib.freq);
 
         this.accelerationData = {
             x: linX,
@@ -294,6 +296,7 @@ class SensorManager {
             comfortClass: comfort.className,
             lateralG: this.accelerationData.lateralG,
             shake: shakeRms,
+            combinedRms: combinedRms,
             unavailable: false
         };
 
@@ -484,6 +487,7 @@ class SensorManager {
             lateralG: this.accelerationData.lateralG || 0,
             shake: this.accelerationData.shake || 0,
             rms: this.accelerationData.rms || 0,
+            combinedRms: this.accelerationData.combinedRms || 0,
             freq: this.accelerationData.freq || 0,
             comfort: this.accelerationData.comfort,
             comfortClass: this.accelerationData.comfortClass,

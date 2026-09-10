@@ -51,16 +51,19 @@
                             <span class="panel-code">VEL</span>
                             <span class="graph-title">速度</span>
                             <span class="legend"><i class="lg-green"></i>km/h</span>
-                            <b id="hud-speed">-- km/h</b>
+                            <b id="hud-speed" class="hud-push">-- km/h</b>
                         </div>
                         <canvas id="chart-speed"></canvas>
                     </article>
                     <article class="nerv-panel graph-panel">
                         <div class="graph-hud">
-                            <span class="panel-code">G</span>
-                            <span class="graph-title">振動 / 横G</span>
-                            <span class="legend"><i class="lg-yellow"></i>振動</span>
-                            <span class="legend"><i class="lg-red"></i>横G</span>
+                            <span class="panel-code">VIB</span>
+                            <span class="graph-title">振動</span>
+                            <span class="legend"><i class="lg-yellow"></i>合成</span>
+                            <span class="legend"><i class="lg-vert"></i>上下</span>
+                            <span class="legend"><i class="lg-horiz"></i>横</span>
+                            <span class="legend"><i class="lg-freq"></i>Hz</span>
+                            <b id="hud-comfort" class="hud-push comfort-chip">--</b>
                             <b id="hud-motion">--</b>
                         </div>
                         <canvas id="chart-motion"></canvas>
@@ -71,7 +74,10 @@
                             <span class="graph-title">静粛 / 音圧</span>
                             <span class="legend"><i class="lg-green"></i>静粛</span>
                             <span class="legend"><i class="lg-cyan"></i>音圧</span>
-                            <b id="hud-noise">--</b>
+                            <span class="legend"><i class="lg-engine"></i>エン</span>
+                            <span class="legend"><i class="lg-road"></i>ロード</span>
+                            <span class="legend"><i class="lg-wind"></i>風</span>
+                            <b id="hud-noise" class="hud-push">--</b>
                         </div>
                         <canvas id="chart-noise"></canvas>
                     </article>
@@ -89,13 +95,14 @@
                         <div id="duration">計測時間: --</div>
                     </div>
                     <div class="sensor-box" id="vibration-data">
-                        <h3>振動・横G</h3>
+                        <h3>振動</h3>
                         <div id="acceleration">上下: -- 横揺れ: --</div>
-                        <div id="vibration-level">振幅 RMS: --</div>
+                        <div id="vibration-combined">合成 RMS: --</div>
+                        <div id="vibration-level">上下 RMS: --</div>
                         <div id="vibration-freq">卓越周波数: -- Hz</div>
                         <div id="comfort">判定: --</div>
                         <div id="lateral-g">横G（コーナリング）: -- G</div>
-                        <div id="lateral-shake">横揺れ: -- m/s²</div>
+                        <div id="lateral-shake">横揺れ RMS: --</div>
                     </div>
                     <div class="sensor-box" id="noise-data">
                         <h3>音圧・静粛性</h3>
