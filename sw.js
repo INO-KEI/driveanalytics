@@ -1,5 +1,5 @@
 // sw.js
-const CACHE_NAME = 'drive-analytics-v4';
+const CACHE_NAME = 'drive-analytics-v12';
 const urlsToCache = [
     './',
     './index.html',
@@ -7,9 +7,11 @@ const urlsToCache = [
     './js/app.js',
     './js/analysis.js',
     './js/sensors.js',
-    './js/ui.js',
+    './js/charts.js',
     './images/icon-192.png',
     './images/icon-512.png',
+    './images/icon-512-maskable.png',
+    './images/apple-touch-icon.png',
     'https://unpkg.com/leaflet@1.7.1/dist/leaflet.js',
     'https://unpkg.com/leaflet@1.7.1/dist/leaflet.css'
 ];
@@ -39,12 +41,20 @@ self.addEventListener('activate', function(event) {
 });
 
 self.addEventListener('fetch', function(event) {
+    if (event.request.method !== 'GET') {
+        return;
+    }
     event.respondWith(
-        caches.match(event.request).then(function(response) {
-            if (response) {
-                return response;
+        fetch(event.request).then(function(response) {
+            if (response && response.status === 200 && response.type !== 'opaque') {
+                const copy = response.clone();
+                caches.open(CACHE_NAME).then(function(cache) {
+                    cache.put(event.request, copy);
+                });
             }
-            return fetch(event.request);
+            return response;
+        }).catch(function() {
+            return caches.match(event.request);
         })
     );
 });

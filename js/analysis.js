@@ -63,6 +63,21 @@
         return 20 * Math.log10(rms);
     }
 
+    // カスタネットなどの衝撃音向け（窓内の最大振幅）
+    function peakDbfsFromTimeDomain(timeBytes) {
+        let peak = 0;
+        for (let i = 0; i < timeBytes.length; i++) {
+            const v = Math.abs((timeBytes[i] - 128) / 128);
+            if (v > peak) {
+                peak = v;
+            }
+        }
+        if (peak < 1e-8) {
+            return -100;
+        }
+        return 20 * Math.log10(peak);
+    }
+
     // FFTビンから帯域の平均パワーを dBFS 相当で返す
     function bandDbfs(freqDb, sampleRate, fftSize, fLow, fHigh) {
         const binHz = sampleRate / fftSize;
@@ -80,26 +95,84 @@
         return 10 * Math.log10(power / count);
     }
 
+    function bandPower(freqDb, sampleRate, fftSize, fLow, fHigh) {
+        const binHz = sampleRate / fftSize;
+        const i0 = Math.max(1, Math.floor(fLow / binHz));
+        const i1 = Math.min(freqDb.length - 1, Math.ceil(fHigh / binHz));
+        let power = 0;
+        let count = 0;
+        for (let i = i0; i <= i1; i++) {
+            const db = freqDb[i];
+            if (!isFinite(db)) {
+                continue;
+            }
+            power += Math.pow(10, db / 10);
+            count++;
+        }
+        return count ? power / count : 0;
+    }
+
     function audioBands(freqDb, sampleRate, fftSize) {
         const engine = bandDbfs(freqDb, sampleRate, fftSize, 30, 250);
         const road = bandDbfs(freqDb, sampleRate, fftSize, 250, 800);
         const wind = bandDbfs(freqDb, sampleRate, fftSize, 800, 5000);
-        const pEngine = Math.pow(10, engine / 10);
-        const pRoad = Math.pow(10, road / 10);
-        const pWind = Math.pow(10, wind / 10);
-        const total = pEngine + pRoad + pWind;
         return {
             engineDb: engine,
             roadDb: road,
-            windDb: wind,
-            enginePct: total > 0 ? (100 * pEngine) / total : 0,
-            roadPct: total > 0 ? (100 * pRoad) / total : 0,
-            windPct: total > 0 ? (100 * pWind) / total : 0
+            windDb: wind
         };
     }
 
-    // 同一端末・同一マウントでの車種比較用（0=うるさい, 100=静か）
-    function quietnessScore(meanDbfs) {
+    // ナビ音声・会話らしい区間。完全除去ではなく除外判定用
+    function speechLikelihood(freqDb, sampleRate, fftSize, midHistory) {
+        const speech = bandPower(freqDb, sampleRate, fftSize, 300, 3400);
+        const low = bandPower(freqDb, sampleRate, fftSize, 30, 250);
+        const high = bandPower(freqDb, sampleRate, fftSize, 4000, 8000);
+        const total = speech + low + high + 1e-12;
+        const speechRatio = speech / total;
+
+        let modulation = 0;
+        if (midHistory && midHistory.length >= 8) {
+            let mean = 0;
+            for (let i = 0; i < midHistory.length; i++) {
+                mean += midHistory[i];
+            }
+            mean /= midHistory.length;
+            let variance = 0;
+            for (let i = 0; i < midHistory.length; i++) {
+                const d = midHistory[i] - mean;
+                variance += d * d;
+            }
+            variance /= midHistory.length;
+            modulation = mean > 1e-12 ? Math.sqrt(variance) / mean : 0;
+        }
+
+        let score = 0;
+        if (speechRatio > 0.42) {
+            score += 0.4;
+        }
+        if (speechRatio > 0.58) {
+            score += 0.2;
+        }
+        if (modulation > 0.22) {
+            score += 0.3;
+        }
+        if (modulation > 0.38) {
+            score += 0.15;
+        }
+        return {
+            score: clamp(score, 0, 1),
+            speechRatio: speechRatio,
+            modulation: modulation,
+            speechPower: speech
+        };
+    }
+
+    // 未校正: 端末の相対dBFS。校正済: カスタネット基準からの差（0に近いほど大きい）
+    function quietnessScore(meanDbfs, calibrated) {
+        if (calibrated) {
+            return Math.round(clamp(((-meanDbfs - 8) / 32) * 100, 0, 100));
+        }
         return Math.round(clamp(((-meanDbfs - 12) / 38) * 100, 0, 100));
     }
 
@@ -187,7 +260,10 @@
         return `rgb(${r},${g},48)`;
     }
 
-    function noiseColor(dbfs) {
+    function noiseColor(dbfs, calibrated) {
+        if (calibrated) {
+            return heatColor((dbfs + 36) / 36);
+        }
         return heatColor((dbfs + 48) / 36);
     }
 
@@ -204,9 +280,100 @@
 
     function formatDuration(ms) {
         const totalSec = Math.max(0, Math.floor(ms / 1000));
-        const mm = String(Math.floor(totalSec / 60)).padStart(2, '0');
+        const hh = Math.floor(totalSec / 3600);
+        const mm = String(Math.floor((totalSec % 3600) / 60)).padStart(2, '0');
         const ss = String(totalSec % 60).padStart(2, '0');
-        return `${mm}:${ss}`;
+        return hh > 0 ? `${hh}:${mm}:${ss}` : `${mm}:${ss}`;
+    }
+
+    function formatStamp(date) {
+        const y = date.getFullYear();
+        const mo = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        const hh = String(date.getHours()).padStart(2, '0');
+        const mm = String(date.getMinutes()).padStart(2, '0');
+        const ss = String(date.getSeconds()).padStart(2, '0');
+        return `${y}${mo}${d}-${hh}${mm}${ss}`;
+    }
+
+    function csvCell(value) {
+        if (value == null || value === '') {
+            return '';
+        }
+        const text = String(value);
+        if (/[",\r\n]/.test(text)) {
+            return `"${text.replace(/"/g, '""')}"`;
+        }
+        return text;
+    }
+
+    function numCell(value, digits) {
+        if (typeof value !== 'number' || Number.isNaN(value)) {
+            return '';
+        }
+        return value.toFixed(digits);
+    }
+
+    function buildTrackCsv(summary, points) {
+        const lines = [
+            '# DriveAnalytics',
+            `# started_at,${summary.startedAt ? new Date(summary.startedAt).toISOString() : ''}`,
+            `# duration,${formatDuration(summary.elapsedMs || 0)}`,
+            `# distance_km,${numCell((summary.distanceM || 0) / 1000, 3)}`,
+            `# average_speed_kmh,${numCell(summary.averageSpeed || 0, 2)}`,
+            `# quietness,${summary.quietness == null ? '' : summary.quietness}`,
+            `# points,${points.length}`,
+            [
+                'index',
+                'time_local',
+                'time_iso',
+                'elapsed_s',
+                'latitude',
+                'longitude',
+                'speed_kmh',
+                'avg_speed_kmh',
+                'distance_m',
+                'rms_ms2',
+                'shake_ms2',
+                'lateral_g',
+                'freq_hz',
+                'comfort',
+                'spl_db',
+                'quietness',
+                'engine_db',
+                'road_db',
+                'wind_db',
+                'voice',
+                'calibrated'
+            ].join(',')
+        ];
+        points.forEach((point) => {
+            const when = new Date(point.time);
+            lines.push([
+                point.index,
+                csvCell(formatClock(when)),
+                csvCell(when.toISOString()),
+                numCell((point.elapsedMs || 0) / 1000, 0),
+                numCell(point.latitude, 6),
+                numCell(point.longitude, 6),
+                numCell(point.speed, 2),
+                numCell(point.avgSpeed, 2),
+                numCell(point.distanceM, 1),
+                numCell(point.rms, 3),
+                numCell(point.shake, 3),
+                numCell(point.lateralG, 3),
+                numCell(point.freq, 2),
+                csvCell(point.voice ? '音声除外' : (point.comfort || '')),
+                numCell(point.dbfs, 2),
+                point.quietness == null ? '' : point.quietness,
+                numCell(point.engineDb, 2),
+                numCell(point.roadDb, 2),
+                numCell(point.windDb, 2),
+                point.voice ? 1 : 0,
+                point.calibrated ? 1 : 0
+            ].join(','));
+        });
+        return lines.join('\r\n');
     }
 
     global.DriveAnalysis = {
@@ -219,6 +386,7 @@
         corneringAccel,
         dbfsFromTimeDomain,
         audioBands,
+        speechLikelihood,
         quietnessScore,
         dominantFrequency,
         comfortFromVibration,
@@ -226,6 +394,9 @@
         noiseColor,
         lateralColor,
         formatClock,
-        formatDuration
+        formatDuration,
+        formatStamp,
+        csvCell,
+        buildTrackCsv
     };
 })(window);

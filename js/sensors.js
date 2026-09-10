@@ -27,13 +27,16 @@ class SensorManager {
         };
         this.noiseData = {
             dbfs: -100,
+            dbfsRaw: -100,
+            calibrated: false,
             quietness: null,
             engineDb: -100,
             roadDb: -100,
             windDb: -100,
-            enginePct: 0,
-            roadPct: 0,
-            windPct: 0
+            engineDbRaw: -100,
+            roadDbRaw: -100,
+            windDbRaw: -100,
+            voiceDetected: false
         };
 
         this.locationWatchId = null;
@@ -46,6 +49,12 @@ class SensorManager {
         this.noiseRafId = null;
         this.sampleTimer = null;
         this.demoTimer = null;
+        this.calibrating = false;
+        this.calibPeak = null;
+        this.calibSavedAt = null;
+        this.speechMidHistory = [];
+        this.voiceHoldUntil = 0;
+        this.lastCleanRaw = null;
 
         this.boundMotionHandler = this.handleMotionEvent.bind(this);
         this.boundLocationUpdate = this.handleLocationUpdate.bind(this);
@@ -63,6 +72,7 @@ class SensorManager {
         this.session = this.createEmptySession();
         this.dataListeners = [];
         this.A = A;
+        this.loadCalibration();
     }
 
     createEmptySession() {
@@ -365,19 +375,46 @@ class SensorManager {
             this.audioContext.sampleRate,
             this.analyzer.fftSize
         );
-
-        this.noiseData = {
-            dbfs: dbfs,
-            quietness: this.getQuietness(),
-            engineDb: bands.engineDb,
-            roadDb: bands.roadDb,
-            windDb: bands.windDb,
-            enginePct: bands.enginePct,
-            roadPct: bands.roadPct,
-            windPct: bands.windPct
-        };
+        const speech = this.A.speechLikelihood(
+            this.freqBuffer,
+            this.audioContext.sampleRate,
+            this.analyzer.fftSize,
+            this.speechMidHistory
+        );
+        this.speechMidHistory.push(speech.speechPower);
+        if (this.speechMidHistory.length > 24) {
+            this.speechMidHistory.shift();
+        }
 
         const now = performance.now();
+        if (speech.score >= 0.55) {
+            this.voiceHoldUntil = now + 800;
+        }
+        const voiceDetected = now < this.voiceHoldUntil;
+
+        if (!voiceDetected) {
+            this.lastCleanRaw = {
+                dbfs: dbfs,
+                engineDb: bands.engineDb,
+                roadDb: bands.roadDb,
+                windDb: bands.windDb
+            };
+        }
+
+        const source = (voiceDetected && this.lastCleanRaw) ? this.lastCleanRaw : {
+            dbfs: dbfs,
+            engineDb: bands.engineDb,
+            roadDb: bands.roadDb,
+            windDb: bands.windDb
+        };
+
+        this.noiseData = this.packNoise(source.dbfs, {
+            engineDb: source.engineDb,
+            roadDb: source.roadDb,
+            windDb: source.windDb,
+            voiceDetected: voiceDetected
+        });
+
         if (now - this.lastUiNotify.noise > 200) {
             this.lastUiNotify.noise = now;
             this.notifyListeners('noise', Object.assign({}, this.noiseData));
@@ -433,7 +470,7 @@ class SensorManager {
         }
 
         const speed = loc.speed || 0;
-        if (speed >= 15 && this.noiseData.dbfs > -90) {
+        if (speed >= 15 && !this.noiseData.voiceDetected && this.noiseData.dbfsRaw > -90) {
             this.session.movingDbfsSum += this.noiseData.dbfs;
             this.session.movingDbfsCount += 1;
         }
@@ -451,13 +488,13 @@ class SensorManager {
             comfort: this.accelerationData.comfort,
             comfortClass: this.accelerationData.comfortClass,
             dbfs: this.noiseData.dbfs,
+            dbfsRaw: this.noiseData.dbfsRaw,
+            calibrated: this.isCalibrated(),
             quietness: this.getQuietness(),
-            enginePct: this.noiseData.enginePct,
-            roadPct: this.noiseData.roadPct,
-            windPct: this.noiseData.windPct,
             engineDb: this.noiseData.engineDb,
             roadDb: this.noiseData.roadDb,
             windDb: this.noiseData.windDb,
+            voice: this.noiseData.voiceDetected,
             avgSpeed: this.getAverageSpeed(),
             distanceM: this.session.distanceM,
             elapsedMs: Date.now() - this.session.startedAt
@@ -472,7 +509,10 @@ class SensorManager {
         if (!this.session.movingDbfsCount) {
             return null;
         }
-        return this.A.quietnessScore(this.session.movingDbfsSum / this.session.movingDbfsCount);
+        return this.A.quietnessScore(
+            this.session.movingDbfsSum / this.session.movingDbfsCount,
+            this.isCalibrated()
+        );
     }
 
     getAverageSpeed() {
@@ -507,6 +547,10 @@ class SensorManager {
         };
     }
 
+    getRecordedPoints() {
+        return this.session.points.slice();
+    }
+
     resetSession() {
         this.session = this.createEmptySession();
         this.session.startedAt = Date.now();
@@ -516,6 +560,9 @@ class SensorManager {
         this.gravityReady = false;
         this.accelerationData.lateralG = 0;
         this.lastUiNotify = { acceleration: 0, noise: 0 };
+        this.speechMidHistory = [];
+        this.voiceHoldUntil = 0;
+        this.lastCleanRaw = null;
     }
 
     isDemoMode() {
@@ -573,15 +620,12 @@ class SensorManager {
                 });
             }
 
-            this.noiseData.dbfs = -38 + Math.abs(corner) * 16 + (bump > 1 ? 8 : 0);
-            let engine = 22 + Math.abs(Math.sin(t)) * 18;
-            let road = 30 + Math.abs(corner) * 22;
-            let wind = 18 + Math.abs(Math.sin(t * 1.7)) * 16;
-            const sum = engine + road + wind;
-            this.noiseData.enginePct = 100 * engine / sum;
-            this.noiseData.roadPct = 100 * road / sum;
-            this.noiseData.windPct = 100 * wind / sum;
-            this.noiseData.quietness = this.getQuietness();
+            const raw = -38 + Math.abs(corner) * 16 + (bump > 1 ? 8 : 0);
+            this.noiseData = this.packNoise(raw, {
+                engineDb: raw - 6 + Math.abs(Math.sin(t)) * 4,
+                roadDb: raw - 2 + Math.abs(corner) * 6,
+                windDb: raw - 10 + Math.abs(Math.sin(t * 1.7)) * 5
+            });
             this.notifyListeners('noise', Object.assign({}, this.noiseData));
             step += 1;
         }, 200);
@@ -596,6 +640,10 @@ class SensorManager {
 
     async startRecording() {
         if (this.isRecording) {
+            return;
+        }
+        if (this.calibrating) {
+            this.notifyListeners('error', { message: '校正中は計測を開始できません。' });
             return;
         }
         this.resetSession();
@@ -641,6 +689,163 @@ class SensorManager {
         this.stopAccelerationTracking();
         this.stopNoiseTracking();
         this.notifyListeners('session', Object.assign(this.getSessionSummary(), { state: 'stopped' }));
+    }
+
+    packNoise(rawDbfs, extra) {
+        extra = extra || {};
+        const calibrated = this.isCalibrated();
+        const engineRaw = extra.engineDb != null ? extra.engineDb : this.noiseData.engineDbRaw;
+        const roadRaw = extra.roadDb != null ? extra.roadDb : this.noiseData.roadDbRaw;
+        const windRaw = extra.windDb != null ? extra.windDb : this.noiseData.windDbRaw;
+        return {
+            dbfsRaw: rawDbfs,
+            dbfs: this.applyCal(rawDbfs),
+            calibrated: calibrated,
+            quietness: this.getQuietness(),
+            engineDbRaw: engineRaw,
+            roadDbRaw: roadRaw,
+            windDbRaw: windRaw,
+            engineDb: this.applyCal(engineRaw),
+            roadDb: this.applyCal(roadRaw),
+            windDb: this.applyCal(windRaw),
+            voiceDetected: Boolean(extra.voiceDetected)
+        };
+    }
+
+    isCalibrated() {
+        return this.calibPeak != null;
+    }
+
+    applyCal(dbfs) {
+        if (this.calibPeak == null) {
+            return dbfs;
+        }
+        return dbfs - this.calibPeak;
+    }
+
+    getCalibrationInfo() {
+        return {
+            calibrated: this.isCalibrated(),
+            peakDbfs: this.calibPeak,
+            savedAt: this.calibSavedAt
+        };
+    }
+
+    loadCalibration() {
+        try {
+            const raw = localStorage.getItem('driveanalytics.noiseCal.v1');
+            if (!raw) {
+                this.calibPeak = null;
+                this.calibSavedAt = null;
+                return;
+            }
+            const data = JSON.parse(raw);
+            this.calibPeak = typeof data.peakDbfs === 'number' ? data.peakDbfs : null;
+            this.calibSavedAt = data.savedAt || null;
+        } catch (error) {
+            this.calibPeak = null;
+            this.calibSavedAt = null;
+        }
+    }
+
+    saveCalibration(peakDbfs) {
+        this.calibPeak = peakDbfs;
+        this.calibSavedAt = new Date().toISOString();
+        localStorage.setItem('driveanalytics.noiseCal.v1', JSON.stringify({
+            peakDbfs: peakDbfs,
+            savedAt: this.calibSavedAt
+        }));
+    }
+
+    clearCalibration() {
+        this.calibPeak = null;
+        this.calibSavedAt = null;
+        localStorage.removeItem('driveanalytics.noiseCal.v1');
+    }
+
+    cancelCalibration() {
+        this.calibrating = false;
+    }
+
+    async captureCalibrationPeak(durationMs, onProgress) {
+        if (this.isRecording) {
+            throw new Error('計測中は校正できません。先に停止してください。');
+        }
+        if (this.calibrating) {
+            throw new Error('校正を実行中です。');
+        }
+
+        this.calibrating = true;
+        let stream = null;
+        let audioContext = null;
+        let rafId = null;
+
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: false,
+                    noiseSuppression: false,
+                    autoGainControl: false
+                },
+                video: false
+            });
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioContext.state === 'suspended') {
+                await audioContext.resume();
+            }
+
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 2048;
+            analyser.smoothingTimeConstant = 0;
+            const source = audioContext.createMediaStreamSource(stream);
+            source.connect(analyser);
+            const timeBuffer = new Uint8Array(analyser.fftSize);
+            const started = performance.now();
+            let peak = -100;
+
+            await new Promise((resolve) => {
+                const tick = () => {
+                    if (!this.calibrating) {
+                        resolve();
+                        return;
+                    }
+                    analyser.getByteTimeDomainData(timeBuffer);
+                    const dbfs = this.A.dbfsFromTimeDomain(timeBuffer);
+                    if (dbfs > peak) {
+                        peak = dbfs;
+                    }
+                    const remainMs = Math.max(0, durationMs - (performance.now() - started));
+                    if (onProgress) {
+                        onProgress({ current: dbfs, peak: peak, remainMs: remainMs });
+                    }
+                    if (remainMs <= 0) {
+                        resolve();
+                        return;
+                    }
+                    rafId = requestAnimationFrame(tick);
+                };
+                tick();
+            });
+
+            return {
+                peakDbfs: peak,
+                clipped: peak > -1.2,
+                tooQuiet: peak < -42
+            };
+        } finally {
+            this.calibrating = false;
+            if (rafId != null) {
+                cancelAnimationFrame(rafId);
+            }
+            if (stream) {
+                stream.getTracks().forEach(function (track) {
+                    track.stop();
+                });
+            }
+            if (audioContext) {
+                audioContext.close();
+            }
+        }
     }
 
     addDataListener(callback) {
