@@ -223,56 +223,6 @@ class NervCharts {
         ctx.fillText(text, x, y);
     }
 
-    comfortFill(cls) {
-        if (cls === 'comfort-good') {
-            return 'rgba(57, 255, 80, 0.22)';
-        }
-        if (cls === 'comfort-mid') {
-            return 'rgba(255, 210, 0, 0.22)';
-        }
-        if (cls === 'comfort-bad') {
-            return 'rgba(255, 122, 24, 0.22)';
-        }
-        if (cls === 'comfort-extreme') {
-            return 'rgba(255, 59, 48, 0.22)';
-        }
-        return 'rgba(255, 210, 0, 0.22)';
-    }
-
-    comfortStroke(cls) {
-        if (cls === 'comfort-good') {
-            return '#39ff50';
-        }
-        if (cls === 'comfort-mid') {
-            return '#ffd200';
-        }
-        if (cls === 'comfort-bad') {
-            return '#ff7a18';
-        }
-        if (cls === 'comfort-extreme') {
-            return '#ff3b30';
-        }
-        return '#ffd200';
-    }
-
-    drawComfortSegments(ctx, pts, now, w, h, maxRms) {
-        if (pts.length < 2) {
-            return;
-        }
-        ctx.lineJoin = 'round';
-        ctx.lineCap = 'round';
-        ctx.lineWidth = 2.6;
-        for (let i = 1; i < pts.length; i++) {
-            const a = pts[i - 1];
-            const b = pts[i];
-            ctx.beginPath();
-            ctx.moveTo(this.axisX(a.t, now, w), this.yOf(a.combinedRms || 0, 0, maxRms, h));
-            ctx.lineTo(this.axisX(b.t, now, w), this.yOf(b.combinedRms || 0, 0, maxRms, h));
-            ctx.strokeStyle = this.comfortStroke(b.comfortClass);
-            ctx.stroke();
-        }
-    }
-
     drawSpeed() {
         const canvas = this.canvases.speed;
         if (!canvas) {
@@ -317,24 +267,16 @@ class NervCharts {
             ...pts.map((p) => p.combinedRms || 0)
         );
 
-        const comfortY = this.yOf(0.315, 0, maxRms, h);
-        ctx.fillStyle = 'rgba(57, 255, 80, 0.07)';
-        ctx.fillRect(0, comfortY, w, h - comfortY);
-        ctx.fillStyle = 'rgba(255, 122, 24, 0.08)';
-        ctx.fillRect(0, this.yOf(0.63, 0, maxRms, h), w, this.yOf(0.315, 0, maxRms, h) - this.yOf(0.63, 0, maxRms, h));
-        ctx.fillStyle = 'rgba(255, 59, 48, 0.10)';
-        ctx.fillRect(0, 0, w, this.yOf(0.63, 0, maxRms, h));
-
-        this.label(ctx, '快適', 6, Math.min(h - 6, comfortY - 3), 'rgba(57,255,80,0.55)');
-        this.label(ctx, '不快', 6, Math.max(14, this.yOf(0.63, 0, maxRms, h) + 11), 'rgba(255,59,48,0.55)');
-
-        const last = pts[pts.length - 1] || this.snapshot;
         this.fillToBaseline(
             ctx, pts, now, w, h,
             (p) => p.combinedRms || 0, 0, maxRms,
-            this.comfortFill(last.comfortClass), 0
+            'rgba(255, 210, 0, 0.22)', 0
         );
-        this.drawComfortSegments(ctx, pts, now, w, h, maxRms);
+        this.strokeLine(
+            ctx, pts, now, w, h,
+            (p) => p.combinedRms || 0, 0, maxRms,
+            '#ffd200', 2.5
+        );
 
         const maxHz = Math.max(16, ...pts.map((p) => p.freq || 0));
         ctx.setLineDash([5, 4]);
@@ -349,7 +291,7 @@ class NervCharts {
         this.glowLast(
             ctx, pts, now, w, h,
             (p) => p.combinedRms || 0, 0, maxRms,
-            this.comfortStroke(last.comfortClass)
+            '#ffd200'
         );
     }
 
