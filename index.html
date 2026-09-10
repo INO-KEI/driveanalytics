@@ -10,51 +10,104 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
 </head>
 <body>
-    <!-- アプリUI構造 -->
     <div class="app-container">
         <header>
             <h1>DriveAnalytics</h1>
+            <p class="tagline">走行軌跡・音圧・振動から乗り心地と静粛性を見る</p>
         </header>
-        
+
         <main>
+            <div id="status-banner" hidden></div>
+
             <div id="controls">
                 <button id="startButton">計測開始</button>
                 <button id="stopButton" disabled>計測停止</button>
             </div>
-            
-            <div id="data-display">
-                <div id="map"></div>
-                <div id="sensors">
-                    <div class="sensor-box" id="location-data">
-                        <h3>位置情報</h3>
-                        <div id="coordinates">緯度: -- 経度: --</div>
-                        <div id="speed">速度: -- km/h</div>
-                    </div>
-                    <div class="sensor-box" id="vibration-data">
-                        <h3>振動レベル</h3>
-                        <div id="acceleration">X: -- Y: -- Z: --</div>
-                        <div id="vibration-level">レベル: --</div>
-                    </div>
-                    <div class="sensor-box" id="noise-data">
-                        <h3>ノイズレベル</h3>
-                        <div id="noise-level">-- dB</div>
+
+            <section class="map-panel">
+                <div class="map-toolbar">
+                    <span class="toolbar-label">スポットの色</span>
+                    <button type="button" id="colorNoise" class="chip is-active">音圧</button>
+                    <button type="button" id="colorLateral" class="chip">横揺れ</button>
+                    <div class="legend" aria-hidden="true">
+                        <span>小</span>
+                        <span class="legend-bar"></span>
+                        <span>大</span>
                     </div>
                 </div>
-                <div id="data-log">
-                    <h3>データログ</h3>
-                    <div id="log-content"></div>
+                <div id="map"></div>
+            </section>
+
+            <div id="sensors">
+                <div class="sensor-box" id="location-data">
+                    <h3>走行</h3>
+                    <div id="coordinates">緯度: -- 経度: --</div>
+                    <div id="speed">速度: -- km/h</div>
+                    <div id="average-speed">平均速度: -- km/h</div>
+                    <div id="distance">走行距離: -- km</div>
+                    <div id="duration">計測時間: --</div>
+                </div>
+                <div class="sensor-box" id="vibration-data">
+                    <h3>振動・横G</h3>
+                    <div id="acceleration">上下: -- 横揺れ: --</div>
+                    <div id="vibration-level">振幅 RMS: --</div>
+                    <div id="vibration-freq">卓越周波数: -- Hz</div>
+                    <div id="comfort">判定: --</div>
+                    <div id="lateral-g">横G（コーナリング）: -- G</div>
+                    <div id="lateral-shake">横揺れ: -- m/s²</div>
+                </div>
+                <div class="sensor-box" id="noise-data">
+                    <h3>音圧・静粛性</h3>
+                    <div id="noise-level">音圧: -- dBFS（相対）</div>
+                    <div id="quietness">静粛性: -- / 100</div>
+                    <p class="hint">同一端末での車種比較向け。絶対dB SPLではありません。</p>
+                    <div class="band">
+                        <div class="band-label" id="band-engine-label">エンジン --%</div>
+                        <div class="band-track"><div id="band-engine" class="band-fill engine"></div></div>
+                    </div>
+                    <div class="band">
+                        <div class="band-label" id="band-road-label">ロードノイズ --%</div>
+                        <div class="band-track"><div id="band-road" class="band-fill road"></div></div>
+                    </div>
+                    <div class="band">
+                        <div class="band-label" id="band-wind-label">風切り音 --%</div>
+                        <div class="band-track"><div id="band-wind" class="band-fill wind"></div></div>
+                    </div>
                 </div>
             </div>
+
+            <section class="track-table-wrap">
+                <h3>走行軌跡</h3>
+                <p id="track-empty" class="hint">計測を開始すると、1秒ごとの地点が地図と表に残ります。行をタップすると地図の該当スポットを開けます。</p>
+                <div class="table-scroll">
+                    <table id="track-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>時刻</th>
+                                <th>速度<br>km/h</th>
+                                <th>横揺れ<br>m/s²</th>
+                                <th>横G</th>
+                                <th>音圧<br>dBFS</th>
+                                <th>エン<br>ジン%</th>
+                                <th>ロード<br>%</th>
+                                <th>風%</th>
+                                <th>振動判定</th>
+                            </tr>
+                        </thead>
+                        <tbody id="track-table-body"></tbody>
+                    </table>
+                </div>
+            </section>
         </main>
     </div>
 
-    <!-- スクリプト -->
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script src="js/app.js"></script>
+    <script src="js/analysis.js"></script>
     <script src="js/sensors.js"></script>
     <script src="js/ui.js"></script>
     <script>
-        // Service Workerの登録
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('./sw.js')
             .then(function(registration) {
@@ -66,4 +119,4 @@
         }
     </script>
 </body>
-</html> 
+</html>
