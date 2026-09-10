@@ -74,9 +74,7 @@ class NervCharts {
             this.hud.speed.textContent = `${(s.speed || 0).toFixed(0)} km/h`;
         }
         if (this.hud.motion) {
-            const hz = s.freq ? `${s.freq.toFixed(1)}Hz` : '--Hz';
-            this.hud.motion.textContent =
-                `Σ ${(s.combinedRms || 0).toFixed(2)}  ${hz}`;
+            this.hud.motion.textContent = `${(s.combinedRms || 0).toFixed(2)}`;
         }
         if (this.hud.comfort) {
             const label = s.comfort || '--';
@@ -84,9 +82,7 @@ class NervCharts {
             this.hud.comfort.className = `hud-push comfort-chip ${s.comfortClass || ''}`;
         }
         if (this.hud.noise) {
-            const q = s.quietness == null ? '--' : String(s.quietness);
-            this.hud.noise.textContent =
-                `${(s.dbfs || 0).toFixed(0)}  E${(s.engineDb || 0).toFixed(0)} R${(s.roadDb || 0).toFixed(0)} W${(s.windDb || 0).toFixed(0)}  Q${q}`;
+            this.hud.noise.textContent = `${(s.dbfs || 0).toFixed(0)} dB`;
         }
     }
 
@@ -222,7 +218,8 @@ class NervCharts {
 
     label(ctx, text, x, y, color) {
         ctx.fillStyle = color;
-        ctx.font = '11px Consolas, monospace';
+        const size = Math.max(14, Math.round(13 * (window.devicePixelRatio || 1)));
+        ctx.font = `bold ${size}px Consolas, monospace`;
         ctx.fillText(text, x, y);
     }
 
@@ -317,7 +314,7 @@ class NervCharts {
         const pts = this.history;
         const maxRms = Math.max(
             1.2,
-            ...pts.map((p) => Math.max(p.combinedRms || 0, p.rms || 0, p.shake || 0))
+            ...pts.map((p) => p.combinedRms || 0)
         );
 
         const comfortY = this.yOf(0.315, 0, maxRms, h);
@@ -336,16 +333,6 @@ class NervCharts {
             ctx, pts, now, w, h,
             (p) => p.combinedRms || 0, 0, maxRms,
             this.comfortFill(last.comfortClass), 0
-        );
-        this.strokeLine(
-            ctx, pts, now, w, h,
-            (p) => p.rms || 0, 0, maxRms,
-            'rgba(255, 243, 214, 0.85)', 1.5
-        );
-        this.strokeLine(
-            ctx, pts, now, w, h,
-            (p) => p.shake || 0, 0, maxRms,
-            '#ff7a18', 1.5
         );
         this.drawComfortSegments(ctx, pts, now, w, h, maxRms);
 

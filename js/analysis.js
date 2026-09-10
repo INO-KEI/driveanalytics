@@ -278,6 +278,10 @@
         return heatColor(shakeMps2 / 1.6);
     }
 
+    function vibrationColor(combinedRms) {
+        return heatColor((combinedRms || 0) / 1.2);
+    }
+
     function formatClock(date) {
         const hh = String(date.getHours()).padStart(2, '0');
         const mm = String(date.getMinutes()).padStart(2, '0');
@@ -403,6 +407,7 @@
         heatColor,
         noiseColor,
         lateralColor,
+        vibrationColor,
         formatClock,
         formatDuration,
         formatStamp,

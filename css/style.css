@@ -280,10 +280,11 @@ button:disabled {
 
 .graph-hud b {
     margin-left: 0.35rem;
-    font-size: 0.72rem;
+    font-size: 1.05rem;
     color: var(--green);
     font-weight: 700;
     white-space: nowrap;
+    letter-spacing: 0.02em;
 }
 
 .graph-hud .hud-push {
@@ -346,6 +347,28 @@ button:disabled {
     background: rgba(7, 8, 6, 0.7);
     color: var(--muted);
     font-size: 9px;
+}
+
+.angel-marker-wrap {
+    background: none !important;
+    border: none !important;
+}
+
+.angel-marker {
+    display: block;
+    color: #ff2a22;
+    font-size: 22px;
+    line-height: 1;
+    text-shadow:
+        0 0 4px #ff7a18,
+        0 0 10px #ff3b30,
+        0 0 18px rgba(255, 40, 20, 0.85);
+    animation: angel-pulse 1.15s ease-in-out infinite;
+}
+
+@keyframes angel-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.7; transform: scale(1.18); }
 }
 
 #sensors {
@@ -563,7 +586,7 @@ button:disabled {
         gap: 0.22rem;
     }
     .graph-hud b {
-        font-size: 0.64rem;
+        font-size: 0.92rem;
     }
     .hdr-sys { display: none; }
 }

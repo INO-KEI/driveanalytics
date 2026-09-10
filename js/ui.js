@@ -41,7 +41,7 @@ class UIManager {
         this.csvMailButton = document.getElementById('csvMail');
         this.statusBanner = document.getElementById('status-banner');
         this.colorNoiseButton = document.getElementById('colorNoise');
-        this.colorLateralButton = document.getElementById('colorLateral');
+        this.colorVibButton = document.getElementById('colorVib');
         this.noiseHint = document.getElementById('noise-hint');
         this.voiceFlag = document.getElementById('voice-flag');
         this.settingsButton = document.getElementById('settingsButton');
@@ -158,7 +158,7 @@ class UIManager {
         });
 
         this.colorNoiseButton.addEventListener('click', () => this.setColorMode('noise'));
-        this.colorLateralButton.addEventListener('click', () => this.setColorMode('lateral'));
+        this.colorVibButton.addEventListener('click', () => this.setColorMode('vib'));
         this.settingsButton.addEventListener('click', () => this.openSettings());
         this.settingsClose.addEventListener('click', () => this.closeSettings());
         this.settingsPanel.addEventListener('click', (event) => {
@@ -284,7 +284,7 @@ class UIManager {
     setColorMode(mode) {
         this.colorMode = mode;
         this.colorNoiseButton.classList.toggle('is-active', mode === 'noise');
-        this.colorLateralButton.classList.toggle('is-active', mode === 'lateral');
+        this.colorVibButton.classList.toggle('is-active', mode === 'vib');
         this.redrawSpots();
     }
 
@@ -375,12 +375,15 @@ class UIManager {
         if (this.marker) {
             this.marker.setLatLng(latlng);
         } else {
-            this.marker = L.circleMarker(latlng, {
-                radius: 5,
-                color: '#ff7a18',
-                weight: 1.5,
-                fillColor: '#39ff50',
-                fillOpacity: 0.95
+            this.marker = L.marker(latlng, {
+                icon: L.divIcon({
+                    className: 'angel-marker-wrap',
+                    html: '<span class="angel-marker">▼</span>',
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 24]
+                }),
+                keyboard: false,
+                zIndexOffset: 1200
             }).addTo(this.map);
         }
         if (this.followMap) {
@@ -504,8 +507,8 @@ class UIManager {
     }
 
     spotColor(point) {
-        return this.colorMode === 'lateral'
-            ? this.A.lateralColor(point.shake)
+        return this.colorMode === 'vib'
+            ? this.A.vibrationColor(point.combinedRms)
             : this.A.noiseColor(point.dbfs, point.calibrated);
     }
 
