@@ -51,6 +51,8 @@
                             <span class="panel-code">VEL</span>
                             <span class="graph-title">速度</span>
                             <span class="legend"><i class="lg-green"></i>km/h</span>
+                            <span class="legend"><i class="lg-accel"></i>加速</span>
+                            <b id="hud-accel">--</b>
                             <b id="hud-speed" class="hud-push">-- km/h</b>
                         </div>
                         <canvas id="chart-speed"></canvas>
@@ -60,7 +62,10 @@
                             <span class="panel-code">VIB</span>
                             <span class="graph-title">振動</span>
                             <span class="legend"><i class="lg-yellow"></i>振幅</span>
+                            <span class="legend"><i class="lg-peak"></i>振れ幅</span>
+                            <span class="legend"><i class="lg-impact"></i>乗上</span>
                             <span class="legend"><i class="lg-freq"></i>Hz</span>
+                            <b id="hud-vib-kind" class="hud-src">--</b>
                             <b id="hud-comfort" class="hud-push comfort-chip">--</b>
                             <b id="hud-motion">--</b>
                         </div>
@@ -75,6 +80,7 @@
                             <span class="legend"><i class="lg-engine"></i>エン</span>
                             <span class="legend"><i class="lg-road"></i>ロード</span>
                             <span class="legend"><i class="lg-wind"></i>風</span>
+                            <b id="hud-noise-src" class="hud-src">--</b>
                             <b id="hud-noise" class="hud-push">--</b>
                         </div>
                         <canvas id="chart-noise"></canvas>
@@ -88,6 +94,7 @@
                         <h3>走行</h3>
                         <div id="coordinates">緯度: -- 経度: --</div>
                         <div id="speed">速度: -- km/h</div>
+                        <div id="long-accel">加速: -- m/s²</div>
                         <div id="average-speed">平均速度: -- km/h</div>
                         <div id="distance">走行距離: -- km</div>
                         <div id="duration">計測時間: --</div>
@@ -97,28 +104,32 @@
                         <div id="acceleration">上下: -- 横揺れ: --</div>
                         <div id="vibration-combined">合成 RMS: --</div>
                         <div id="vibration-level">上下 RMS: --</div>
+                        <div id="vibration-source">要因: --</div>
                         <div id="vibration-freq">卓越周波数: -- Hz</div>
                         <div id="comfort">判定: --</div>
                         <div id="lateral-g">横G（コーナリング）: -- G</div>
                         <div id="lateral-shake">横揺れ RMS: --</div>
+                        <p class="hint">縮尺は 0–2.0 m/s² 固定です。下側の持続揺れはエンジン・軽い路面、赤い尖りは継ぎ目・マンホールなどの乗り上げです。</p>
                     </div>
                     <div class="sensor-box" id="noise-data">
                         <h3>音圧・静粛性</h3>
                         <div id="noise-level">音圧: --</div>
                         <div id="quietness">静粛性: -- / 100</div>
+                        <div id="noise-dominant">主因: --</div>
                         <div id="voice-flag" class="hint" hidden>ナビ/会話を検出。この瞬間は静粛性から除外しています。</div>
                         <p class="hint" id="noise-hint">未校正です。同一端末での車種比較向けです。</p>
-                        <div class="band">
-                            <div class="band-label" id="band-engine-label">エンジン --</div>
-                            <div class="band-track"><div id="band-engine" class="band-fill engine"></div></div>
-                        </div>
-                        <div class="band">
-                            <div class="band-label" id="band-road-label">ロードノイズ --</div>
-                            <div class="band-track"><div id="band-road" class="band-fill road"></div></div>
-                        </div>
-                        <div class="band">
-                            <div class="band-label" id="band-wind-label">風切り音 --</div>
-                            <div class="band-track"><div id="band-wind" class="band-fill wind"></div></div>
+                        <p class="hint">マイク波形をFFTし、周波数帯のパワー比で全体の音圧を分解しています。帯域は重なるため目安です。</p>
+                        <div class="band-mix">
+                            <div class="band-mix-track">
+                                <div id="band-engine" class="band-fill engine"></div>
+                                <div id="band-road" class="band-fill road"></div>
+                                <div id="band-wind" class="band-fill wind"></div>
+                            </div>
+                            <div class="band-mix-legend">
+                                <div class="band-label" id="band-engine-label">エンジン --</div>
+                                <div class="band-label" id="band-road-label">ロードノイズ --</div>
+                                <div class="band-label" id="band-wind-label">風切り音 --</div>
+                            </div>
                         </div>
                     </div>
                 </div>

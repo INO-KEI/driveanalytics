@@ -41,6 +41,18 @@
         return delta;
     }
 
+    // GPS速度の変化から前後加速度 [m/s²]。異常値は捨てる
+    function longitudinalAccel(speed0Kmh, speed1Kmh, dtSec) {
+        if (!dtSec || dtSec < 0.12 || dtSec > 2.5) {
+            return null;
+        }
+        const raw = ((speed1Kmh - speed0Kmh) / 3.6) / dtSec;
+        if (!isFinite(raw)) {
+            return null;
+        }
+        return clamp(raw, -8, 8);
+    }
+
     // 走行軌跡の方位変化と速度からコーナリング加速度 [m/s²]
     function corneringAccel(speedMps, headingDeltaDeg, dtSec) {
         if (!dtSec || dtSec <= 0 || speedMps < 1.4) {
@@ -78,30 +90,45 @@
         return 20 * Math.log10(peak);
     }
 
-    // FFTビンから帯域の平均パワーを dBFS 相当で返す
-    function bandDbfs(freqDb, sampleRate, fftSize, fLow, fHigh) {
+    // 車内NVHの一次近似。帯域は重なるので完全分離ではなく目安。
+    const NOISE_BANDS = {
+        engine: { low: 20, high: 400, label: 'エンジン' },
+        road: { low: 400, high: 1600, label: 'ロードノイズ' },
+        wind: { low: 1600, high: 8000, label: '風切り音' }
+    };
+
+    const NOISE_DOMINANT_LABEL = {
+        engine: 'エンジン',
+        road: 'ロードノイズ',
+        wind: '風切り音',
+        none: '--'
+    };
+
+    function bandBinRange(sampleRate, fftSize, freqCount, fLow, fHigh) {
         const binHz = sampleRate / fftSize;
-        const i0 = Math.max(1, Math.floor(fLow / binHz));
-        const i1 = Math.min(freqDb.length - 1, Math.ceil(fHigh / binHz));
+        const i0 = Math.max(1, Math.round(fLow / binHz));
+        const i1 = Math.min(freqCount, Math.round(fHigh / binHz));
+        return { i0: i0, i1: Math.max(i0, i1) };
+    }
+
+    function bandIntegratedPower(freqDb, sampleRate, fftSize, fLow, fHigh) {
+        const range = bandBinRange(sampleRate, fftSize, freqDb.length, fLow, fHigh);
         let power = 0;
-        let count = 0;
-        for (let i = i0; i <= i1; i++) {
-            power += Math.pow(10, freqDb[i] / 10);
-            count++;
+        for (let i = range.i0; i < range.i1; i++) {
+            const db = freqDb[i];
+            if (!isFinite(db)) {
+                continue;
+            }
+            power += Math.pow(10, db / 10);
         }
-        if (!count || power <= 0) {
-            return -100;
-        }
-        return 10 * Math.log10(power / count);
+        return power;
     }
 
     function bandPower(freqDb, sampleRate, fftSize, fLow, fHigh) {
-        const binHz = sampleRate / fftSize;
-        const i0 = Math.max(1, Math.floor(fLow / binHz));
-        const i1 = Math.min(freqDb.length - 1, Math.ceil(fHigh / binHz));
+        const range = bandBinRange(sampleRate, fftSize, freqDb.length, fLow, fHigh);
         let power = 0;
         let count = 0;
-        for (let i = i0; i <= i1; i++) {
+        for (let i = range.i0; i < range.i1; i++) {
             const db = freqDb[i];
             if (!isFinite(db)) {
                 continue;
@@ -112,15 +139,52 @@
         return count ? power / count : 0;
     }
 
-    function audioBands(freqDb, sampleRate, fftSize) {
-        const engine = bandDbfs(freqDb, sampleRate, fftSize, 30, 250);
-        const road = bandDbfs(freqDb, sampleRate, fftSize, 250, 800);
-        const wind = bandDbfs(freqDb, sampleRate, fftSize, 800, 5000);
+    function emptyBandSplit() {
         return {
-            engineDb: engine,
-            roadDb: road,
-            windDb: wind
+            engineDb: -100,
+            roadDb: -100,
+            windDb: -100,
+            engineShare: 0,
+            roadShare: 0,
+            windShare: 0,
+            dominant: 'none'
         };
+    }
+
+    // 全体の音圧を、FFT帯域の積分パワー比でエンジン／ロード／風切に按分する
+    function splitOverallDbfs(overallDbfs, engineP, roadP, windP) {
+        const total = engineP + roadP + windP;
+        if (!(total > 0) || !isFinite(overallDbfs)) {
+            return emptyBandSplit();
+        }
+        const engineShare = engineP / total;
+        const roadShare = roadP / total;
+        const windShare = windP / total;
+        const toDb = function (share) {
+            return overallDbfs + 10 * Math.log10(Math.max(share, 1e-12));
+        };
+        let dominant = 'engine';
+        if (roadP >= engineP && roadP >= windP) {
+            dominant = 'road';
+        } else if (windP >= engineP && windP >= roadP) {
+            dominant = 'wind';
+        }
+        return {
+            engineDb: toDb(engineShare),
+            roadDb: toDb(roadShare),
+            windDb: toDb(windShare),
+            engineShare: engineShare,
+            roadShare: roadShare,
+            windShare: windShare,
+            dominant: dominant
+        };
+    }
+
+    function audioBands(freqDb, sampleRate, fftSize, overallDbfs) {
+        const engineP = bandIntegratedPower(freqDb, sampleRate, fftSize, NOISE_BANDS.engine.low, NOISE_BANDS.engine.high);
+        const roadP = bandIntegratedPower(freqDb, sampleRate, fftSize, NOISE_BANDS.road.low, NOISE_BANDS.road.high);
+        const windP = bandIntegratedPower(freqDb, sampleRate, fftSize, NOISE_BANDS.wind.low, NOISE_BANDS.wind.high);
+        return splitOverallDbfs(overallDbfs, engineP, roadP, windP);
     }
 
     // ナビ音声・会話らしい区間。完全除去ではなく除外判定用
@@ -232,6 +296,43 @@
         return Math.sqrt(v * v + h * h);
     }
 
+    // 振幅グラフの固定縮尺 [m/s²]。ISO 2631-1 の「極めて不快」(1.6) が上部に来る
+    const VIB_CHART = {
+        yMax: 2.0,
+        hzMax: 25,
+        droneHigh: 0.32,
+        impactHigh: 0.8
+    };
+
+    const VIB_KIND_LABEL = {
+        drone: 'エンジン・路面',
+        rough: '強い路面',
+        impact: '乗り上げ',
+        none: '--'
+    };
+
+    const VIB_KIND_COLOR = {
+        drone: '#ffd200',
+        rough: '#ff7a18',
+        impact: '#ff3b30',
+        none: '#8a6a45'
+    };
+
+    // 振れ幅（片振幅）とRMSの比で、持続振動と衝撃を分ける
+    function classifyVibration(vertRms, peakToPeak) {
+        const rms = vertRms || 0;
+        const peakAmp = (peakToPeak || 0) / 2;
+        const crest = rms > 0.05 ? peakAmp / rms : 0;
+
+        if (peakAmp >= 0.9 || (crest >= 3 && peakAmp >= 0.5)) {
+            return { kind: 'impact', label: VIB_KIND_LABEL.impact, className: 'vib-impact' };
+        }
+        if (rms < VIB_CHART.droneHigh && peakAmp < 0.7) {
+            return { kind: 'drone', label: VIB_KIND_LABEL.drone, className: 'vib-drone' };
+        }
+        return { kind: 'rough', label: VIB_KIND_LABEL.rough, className: 'vib-rough' };
+    }
+
     // ISO 2631-1 の快適区分を簡易適用（車内スマホは目安）
     function comfortFromVibration(rms, freqHz) {
         let weighted = rms;
@@ -333,6 +434,7 @@
             `# distance_km,${numCell((summary.distanceM || 0) / 1000, 3)}`,
             `# average_speed_kmh,${numCell(summary.averageSpeed || 0, 2)}`,
             `# quietness,${summary.quietness == null ? '' : summary.quietness}`,
+            '# noise_bands,engine 20-400Hz,road 400-1600Hz,wind 1600-8000Hz',
             `# points,${points.length}`,
             [
                 'index',
@@ -355,6 +457,10 @@
                 'engine_db',
                 'road_db',
                 'wind_db',
+                'engine_share',
+                'road_share',
+                'wind_share',
+                'dominant_noise',
                 'voice',
                 'calibrated'
             ].join(',')
@@ -382,6 +488,10 @@
                 numCell(point.engineDb, 2),
                 numCell(point.roadDb, 2),
                 numCell(point.windDb, 2),
+                numCell(point.engineShare, 3),
+                numCell(point.roadShare, 3),
+                numCell(point.windShare, 3),
+                csvCell(point.dominant || ''),
                 point.voice ? 1 : 0,
                 point.calibrated ? 1 : 0
             ].join(','));
@@ -396,13 +506,21 @@
         haversineMeters,
         bearingDegrees,
         wrapHeadingDelta,
+        longitudinalAccel,
         corneringAccel,
         dbfsFromTimeDomain,
+        NOISE_BANDS,
+        NOISE_DOMINANT_LABEL,
         audioBands,
+        splitOverallDbfs,
         speechLikelihood,
         quietnessScore,
         dominantFrequency,
         combineVibrationRms,
+        VIB_CHART,
+        VIB_KIND_LABEL,
+        VIB_KIND_COLOR,
+        classifyVibration,
         comfortFromVibration,
         heatColor,
         noiseColor,

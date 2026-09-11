@@ -16,12 +16,14 @@ class UIManager {
         this.stopButton = document.getElementById('stopButton');
         this.coordinatesElement = document.getElementById('coordinates');
         this.speedElement = document.getElementById('speed');
+        this.longAccelElement = document.getElementById('long-accel');
         this.avgSpeedElement = document.getElementById('average-speed');
         this.distanceElement = document.getElementById('distance');
         this.durationElement = document.getElementById('duration');
         this.accelerationElement = document.getElementById('acceleration');
         this.vibrationLevelElement = document.getElementById('vibration-level');
         this.vibrationCombinedElement = document.getElementById('vibration-combined');
+        this.vibrationSourceElement = document.getElementById('vibration-source');
         this.vibrationFreqElement = document.getElementById('vibration-freq');
         this.comfortElement = document.getElementById('comfort');
         this.lateralElement = document.getElementById('lateral-g');
@@ -44,6 +46,7 @@ class UIManager {
         this.colorVibButton = document.getElementById('colorVib');
         this.noiseHint = document.getElementById('noise-hint');
         this.voiceFlag = document.getElementById('voice-flag');
+        this.noiseDominant = document.getElementById('noise-dominant');
         this.settingsButton = document.getElementById('settingsButton');
         this.settingsPanel = document.getElementById('settings-panel');
         this.settingsClose = document.getElementById('settingsClose');
@@ -361,6 +364,11 @@ class UIManager {
         this.coordinatesElement.textContent =
             `緯度: ${data.latitude.toFixed(6)} 経度: ${data.longitude.toFixed(6)}`;
         this.speedElement.textContent = `速度: ${(data.speed || 0).toFixed(1)} km/h`;
+        if (this.longAccelElement) {
+            const accel = data.accelMps2 || 0;
+            const sign = accel > 0.05 ? '+' : '';
+            this.longAccelElement.textContent = `加速: ${sign}${accel.toFixed(2)} m/s²`;
+        }
         if (data.averageSpeed != null) {
             this.avgSpeedElement.textContent = `平均速度: ${data.averageSpeed.toFixed(1)} km/h`;
         }
@@ -389,7 +397,10 @@ class UIManager {
         if (this.followMap) {
             this.map.panTo(latlng, { animate: true, duration: 0.4 });
         }
-        this.pushChart({ speed: data.speed || 0 });
+        this.pushChart({
+            speed: data.speed || 0,
+            accelMps2: data.accelMps2 || 0
+        });
     }
 
     updateAccelerationUI(data) {
@@ -414,6 +425,10 @@ class UIManager {
                 `合成 RMS: ${(data.combinedRms || 0).toFixed(2)} m/s²（上下と横揺れの二乗和平方根）`;
             this.vibrationCombinedElement.className = data.comfortClass || '';
         }
+        if (this.vibrationSourceElement) {
+            this.vibrationSourceElement.textContent = `要因: ${data.vibLabel || '--'}`;
+            this.vibrationSourceElement.className = data.vibClass || '';
+        }
         this.vibrationLevelElement.textContent =
             `上下 RMS: ${(data.rms || 0).toFixed(2)} m/s²（振れ幅 ${(data.peak || 0).toFixed(2)}）`;
         this.vibrationLevelElement.className = data.comfortClass || '';
@@ -426,9 +441,13 @@ class UIManager {
             rms: data.rms || 0,
             shake: data.shake || 0,
             combinedRms: data.combinedRms || 0,
+            peak: data.peak || 0,
             freq: data.freq || 0,
             comfort: data.comfort || '',
-            comfortClass: data.comfortClass || ''
+            comfortClass: data.comfortClass || '',
+            vibKind: data.vibKind || 'none',
+            vibLabel: data.vibLabel || '',
+            vibClass: data.vibClass || ''
         });
     }
 
@@ -445,9 +464,7 @@ class UIManager {
             this.voiceFlag.hidden = !data.voiceDetected;
         }
 
-        this.setBandDb(this.engineBar, this.engineLabel, data.engineDb, 'エンジン', data.calibrated);
-        this.setBandDb(this.roadBar, this.roadLabel, data.roadDb, 'ロードノイズ', data.calibrated);
-        this.setBandDb(this.windBar, this.windLabel, data.windDb, '風切り音', data.calibrated);
+        this.setBandMix(data);
         this.pushChart({
             dbfs: data.dbfs,
             quietness: data.quietness,
@@ -455,16 +472,56 @@ class UIManager {
             calibrated: data.calibrated,
             engineDb: data.engineDb,
             roadDb: data.roadDb,
-            windDb: data.windDb
+            windDb: data.windDb,
+            engineShare: data.engineShare,
+            roadShare: data.roadShare,
+            windShare: data.windShare,
+            dominant: data.dominant
         });
     }
 
-    setBandDb(bar, label, db, name, calibrated) {
+    bandLabelText(key, db, share, calibrated) {
+        const band = this.A.NOISE_BANDS[key];
         const value = typeof db === 'number' ? db : -100;
+        const pct = Math.round((share || 0) * 100);
         const unit = calibrated ? 'dB' : 'dBFS';
-        label.textContent = `${name} ${value.toFixed(1)} ${unit}`;
-        const t = calibrated ? (value + 40) / 40 : (value + 60) / 60;
-        bar.style.width = `${Math.round(this.A.clamp(t, 0, 1) * 100)}%`;
+        return `${band.label} ${pct}%\n${value.toFixed(1)} ${unit}\n${this.formatHz(band.low)}–${this.formatHz(band.high)}`;
+    }
+
+    formatHz(hz) {
+        if (hz >= 1000) {
+            const k = hz / 1000;
+            return `${Number.isInteger(k) ? k : k}k`;
+        }
+        return String(hz);
+    }
+
+    setBandMix(data) {
+        const engineShare = data.engineShare || 0;
+        const roadShare = data.roadShare || 0;
+        const windShare = data.windShare || 0;
+        if (this.engineBar) {
+            this.engineBar.style.width = `${(engineShare * 100).toFixed(1)}%`;
+        }
+        if (this.roadBar) {
+            this.roadBar.style.width = `${(roadShare * 100).toFixed(1)}%`;
+        }
+        if (this.windBar) {
+            this.windBar.style.width = `${(windShare * 100).toFixed(1)}%`;
+        }
+        if (this.engineLabel) {
+            this.engineLabel.textContent = this.bandLabelText('engine', data.engineDb, engineShare, data.calibrated);
+        }
+        if (this.roadLabel) {
+            this.roadLabel.textContent = this.bandLabelText('road', data.roadDb, roadShare, data.calibrated);
+        }
+        if (this.windLabel) {
+            this.windLabel.textContent = this.bandLabelText('wind', data.windDb, windShare, data.calibrated);
+        }
+        if (this.noiseDominant) {
+            const name = this.A.NOISE_DOMINANT_LABEL[data.dominant] || '--';
+            this.noiseDominant.textContent = `主因: ${name}`;
+        }
     }
 
     addTrackPoint(point) {
@@ -484,7 +541,7 @@ class UIManager {
             return true;
         }
         const loud = !point.voice && (point.calibrated ? point.dbfs >= -12 : point.dbfs >= -18);
-        if (Math.abs(point.lateralG) >= 0.2 || point.shake >= 0.45 || loud) {
+        if (point.vibKind === 'impact' || Math.abs(point.lateralG) >= 0.2 || point.shake >= 0.45 || loud) {
             return true;
         }
         const interval = this.trackPoints.length > 7200 ? 15 : this.trackPoints.length > 2400 ? 8 : 3;
@@ -508,7 +565,7 @@ class UIManager {
 
     spotColor(point) {
         return this.colorMode === 'vib'
-            ? this.A.vibrationColor(point.combinedRms)
+            ? (point.vibKind === 'impact' ? '#ff3b30' : this.A.vibrationColor(point.combinedRms))
             : this.A.noiseColor(point.dbfs, point.calibrated);
     }
 
@@ -520,10 +577,10 @@ class UIManager {
                 横揺れ ${point.shake.toFixed(2)} m/s²<br>
                 横G ${Math.abs(point.lateralG).toFixed(2)} G<br>
                 音圧 ${point.dbfs.toFixed(1)} ${this.noiseUnit(point.calibrated)}<br>
-                エンジン ${point.engineDb.toFixed(1)} /
-                ロード ${point.roadDb.toFixed(1)} /
-                風 ${point.windDb.toFixed(1)} ${this.noiseUnit(point.calibrated)}<br>
-                振動 ${point.comfort}${point.voice ? '<br>ナビ/会話のため除外' : ''}
+                エンジン ${point.engineDb.toFixed(1)} (${Math.round((point.engineShare || 0) * 100)}%) /
+                ロード ${point.roadDb.toFixed(1)} (${Math.round((point.roadShare || 0) * 100)}%) /
+                風 ${point.windDb.toFixed(1)} (${Math.round((point.windShare || 0) * 100)}%) ${this.noiseUnit(point.calibrated)}<br>
+                振動 ${point.comfort}${point.vibLabel ? ' / ' + point.vibLabel : ''}${point.voice ? '<br>ナビ/会話のため除外' : ''}
             </div>
         `;
     }

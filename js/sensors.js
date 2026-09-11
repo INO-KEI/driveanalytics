@@ -8,9 +8,11 @@ class SensorManager {
             latitude: null,
             longitude: null,
             speed: 0,
+            accelMps2: 0,
             heading: null,
             accuracy: null
         };
+        this.longAccel = 0;
         this.accelerationData = {
             x: 0,
             y: 0,
@@ -24,7 +26,10 @@ class SensorManager {
             comfortClass: '',
             lateralG: 0,
             shake: 0,
-            combinedRms: 0
+            combinedRms: 0,
+            vibKind: 'none',
+            vibLabel: '',
+            vibClass: ''
         };
         this.noiseData = {
             dbfs: -100,
@@ -37,6 +42,10 @@ class SensorManager {
             engineDbRaw: -100,
             roadDbRaw: -100,
             windDbRaw: -100,
+            engineShare: 0,
+            roadShare: 0,
+            windShare: 0,
+            dominant: 'none',
             voiceDetected: false
         };
 
@@ -144,7 +153,19 @@ class SensorManager {
                 : 0;
             const speedMps = (speedKmh || 0) / 3.6;
             this.accelerationData.lateralG = this.A.corneringAccel(speedMps, headingDelta, dt) / this.A.G;
+
+            const rawAccel = this.A.longitudinalAccel(
+                this.session.lastFix.speedKmh || 0,
+                speedKmh || 0,
+                dt
+            );
+            if (rawAccel != null) {
+                this.longAccel = this.longAccel * 0.62 + rawAccel * 0.38;
+            } else if (dt >= 2.5) {
+                this.longAccel *= 0.5;
+            }
         }
+        this.locationData.accelMps2 = this.longAccel;
 
         this.session.lastFix = {
             latitude: coords.latitude,
@@ -282,6 +303,7 @@ class SensorManager {
         const shakeRms = this.rms(this.horizSamples);
         const combinedRms = this.A.combineVibrationRms(vib.rms, shakeRms);
         const comfort = this.A.comfortFromVibration(combinedRms, vib.freq);
+        const source = this.A.classifyVibration(vib.rms, vib.peakToPeak);
 
         this.accelerationData = {
             x: linX,
@@ -297,6 +319,9 @@ class SensorManager {
             lateralG: this.accelerationData.lateralG,
             shake: shakeRms,
             combinedRms: combinedRms,
+            vibKind: source.kind,
+            vibLabel: source.label,
+            vibClass: source.className,
             unavailable: false
         };
 
@@ -350,7 +375,9 @@ class SensorManager {
             }
 
             this.analyzer = this.audioContext.createAnalyser();
-            this.analyzer.fftSize = 2048;
+            this.analyzer.fftSize = 4096;
+            this.analyzer.minDecibels = -100;
+            this.analyzer.maxDecibels = 0;
             this.analyzer.smoothingTimeConstant = 0.7;
             this.freqBuffer = new Float32Array(this.analyzer.frequencyBinCount);
             this.timeBuffer = new Uint8Array(this.analyzer.fftSize);
@@ -376,7 +403,8 @@ class SensorManager {
         const bands = this.A.audioBands(
             this.freqBuffer,
             this.audioContext.sampleRate,
-            this.analyzer.fftSize
+            this.analyzer.fftSize,
+            dbfs
         );
         const speech = this.A.speechLikelihood(
             this.freqBuffer,
@@ -400,7 +428,11 @@ class SensorManager {
                 dbfs: dbfs,
                 engineDb: bands.engineDb,
                 roadDb: bands.roadDb,
-                windDb: bands.windDb
+                windDb: bands.windDb,
+                engineShare: bands.engineShare,
+                roadShare: bands.roadShare,
+                windShare: bands.windShare,
+                dominant: bands.dominant
             };
         }
 
@@ -408,13 +440,21 @@ class SensorManager {
             dbfs: dbfs,
             engineDb: bands.engineDb,
             roadDb: bands.roadDb,
-            windDb: bands.windDb
+            windDb: bands.windDb,
+            engineShare: bands.engineShare,
+            roadShare: bands.roadShare,
+            windShare: bands.windShare,
+            dominant: bands.dominant
         };
 
         this.noiseData = this.packNoise(source.dbfs, {
             engineDb: source.engineDb,
             roadDb: source.roadDb,
             windDb: source.windDb,
+            engineShare: source.engineShare,
+            roadShare: source.roadShare,
+            windShare: source.windShare,
+            dominant: source.dominant,
             voiceDetected: voiceDetected
         });
 
@@ -491,6 +531,9 @@ class SensorManager {
             freq: this.accelerationData.freq || 0,
             comfort: this.accelerationData.comfort,
             comfortClass: this.accelerationData.comfortClass,
+            peak: this.accelerationData.peak || 0,
+            vibKind: this.accelerationData.vibKind || 'none',
+            vibLabel: this.accelerationData.vibLabel || '',
             dbfs: this.noiseData.dbfs,
             dbfsRaw: this.noiseData.dbfsRaw,
             calibrated: this.isCalibrated(),
@@ -498,6 +541,10 @@ class SensorManager {
             engineDb: this.noiseData.engineDb,
             roadDb: this.noiseData.roadDb,
             windDb: this.noiseData.windDb,
+            engineShare: this.noiseData.engineShare,
+            roadShare: this.noiseData.roadShare,
+            windShare: this.noiseData.windShare,
+            dominant: this.noiseData.dominant,
             voice: this.noiseData.voiceDetected,
             avgSpeed: this.getAverageSpeed(),
             distanceM: this.session.distanceM,
@@ -563,6 +610,8 @@ class SensorManager {
         this.motionTimes = [];
         this.gravityReady = false;
         this.accelerationData.lateralG = 0;
+        this.longAccel = 0;
+        this.locationData.accelMps2 = 0;
         this.lastUiNotify = { acceleration: 0, noise: 0 };
         this.speechMidHistory = [];
         this.voiceHoldUntil = 0;
@@ -607,12 +656,12 @@ class SensorManager {
             });
 
             const corner = Math.sin(t * 2.4);
-            const bump = Math.abs(Math.sin(step / 3)) > 0.85 ? 1.4 : 0.35;
+            const bump = Math.abs(Math.sin(step / 3)) > 0.88 ? 1.9 : 0.18;
             for (let k = 0; k < 4; k++) {
                 const phase = (step * 4 + k) / 2;
                 this.handleMotionEvent({
                     acceleration: {
-                        x: corner * 2.2,
+                        x: corner * 0.4,
                         y: 0.05,
                         z: bump * Math.sin(phase)
                     },
@@ -625,11 +674,11 @@ class SensorManager {
             }
 
             const raw = -38 + Math.abs(corner) * 16 + (bump > 1 ? 8 : 0);
-            this.noiseData = this.packNoise(raw, {
-                engineDb: raw - 6 + Math.abs(Math.sin(t)) * 4,
-                roadDb: raw - 2 + Math.abs(corner) * 6,
-                windDb: raw - 10 + Math.abs(Math.sin(t * 1.7)) * 5
-            });
+            const engineP = 0.22 + Math.abs(Math.sin(t)) * 0.18;
+            const roadP = 0.38 + Math.abs(corner) * 0.28 + (bump > 1 ? 0.2 : 0);
+            const windP = 0.12 + Math.max(0, speedMps - 8) * 0.03 + Math.abs(Math.sin(t * 1.7)) * 0.08;
+            const bands = this.A.splitOverallDbfs(raw, engineP, roadP, windP);
+            this.noiseData = this.packNoise(raw, bands);
             this.notifyListeners('noise', Object.assign({}, this.noiseData));
             step += 1;
         }, 200);
@@ -701,6 +750,9 @@ class SensorManager {
         const engineRaw = extra.engineDb != null ? extra.engineDb : this.noiseData.engineDbRaw;
         const roadRaw = extra.roadDb != null ? extra.roadDb : this.noiseData.roadDbRaw;
         const windRaw = extra.windDb != null ? extra.windDb : this.noiseData.windDbRaw;
+        const engineShare = extra.engineShare != null ? extra.engineShare : this.noiseData.engineShare;
+        const roadShare = extra.roadShare != null ? extra.roadShare : this.noiseData.roadShare;
+        const windShare = extra.windShare != null ? extra.windShare : this.noiseData.windShare;
         return {
             dbfsRaw: rawDbfs,
             dbfs: this.applyCal(rawDbfs),
@@ -712,6 +764,10 @@ class SensorManager {
             engineDb: this.applyCal(engineRaw),
             roadDb: this.applyCal(roadRaw),
             windDb: this.applyCal(windRaw),
+            engineShare: engineShare || 0,
+            roadShare: roadShare || 0,
+            windShare: windShare || 0,
+            dominant: extra.dominant || this.noiseData.dominant || 'none',
             voiceDetected: Boolean(extra.voiceDetected)
         };
     }
