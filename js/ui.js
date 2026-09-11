@@ -219,7 +219,7 @@ class UIManager {
         }
         this.noiseHint.textContent = this.sensorManager.isCalibrated()
             ? 'カスタネット基準です。0 dB は校正音と同じ大きさです。'
-            : '未校正です。同一端末での車種比較向けです。';
+            : '未校正です。0 dB はマイクが振り切れる大きさで、無音でも端末ノイズで下の方に線が出ます。同一端末での車種比較向けです。';
     }
 
     async runCalibration() {

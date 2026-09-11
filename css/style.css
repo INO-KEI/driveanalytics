@@ -324,10 +324,6 @@ button:disabled {
     border-color: var(--red);
 }
 
-#hud-vib-kind.vib-drone { color: #ffd200; }
-#hud-vib-kind.vib-rough { color: var(--orange); }
-#hud-vib-kind.vib-impact { color: var(--red); }
-
 #vibration-source.vib-drone { color: #ffd200; }
 #vibration-source.vib-rough { color: var(--orange); }
 #vibration-source.vib-impact { color: var(--red); font-weight: 700; }

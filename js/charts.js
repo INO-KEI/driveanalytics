@@ -11,7 +11,6 @@ class NervCharts {
             accel: document.getElementById('hud-accel'),
             motion: document.getElementById('hud-motion'),
             comfort: document.getElementById('hud-comfort'),
-            vibKind: document.getElementById('hud-vib-kind'),
             noise: document.getElementById('hud-noise'),
             noiseSrc: document.getElementById('hud-noise-src')
         };
@@ -41,13 +40,13 @@ class NervCharts {
             vibKind: 'none',
             vibLabel: '',
             vibClass: '',
-            dbfs: -50,
+            dbfs: -100,
             quietness: null,
             voice: false,
             calibrated: false,
-            engineDb: -50,
-            roadDb: -50,
-            windDb: -50,
+            engineDb: -100,
+            roadDb: -100,
+            windDb: -100,
             engineShare: 0,
             roadShare: 0,
             windShare: 0,
@@ -97,10 +96,6 @@ class NervCharts {
             const label = s.comfort || '--';
             this.hud.comfort.textContent = label;
             this.hud.comfort.className = `hud-push comfort-chip ${s.comfortClass || ''}`;
-        }
-        if (this.hud.vibKind) {
-            this.hud.vibKind.textContent = s.vibLabel || '--';
-            this.hud.vibKind.className = `hud-src ${s.vibClass || ''}`;
         }
         if (this.hud.noise) {
             this.hud.noise.textContent = `${(s.dbfs || 0).toFixed(0)} dB`;
@@ -430,7 +425,7 @@ class NervCharts {
         const now = performance.now();
         const pts = this.history;
         const calibrated = pts.some((p) => p.calibrated);
-        const yMin = calibrated ? -40 : -60;
+        const yMin = calibrated ? -50 : -80;
         const yMax = calibrated ? 8 : 0;
 
         // 静粛性：緑の面積が大きいほど静か
@@ -442,8 +437,8 @@ class NervCharts {
         );
 
         const dbOf = (key) => (p) => {
-            const v = p[key];
-            return typeof v === 'number' ? v : yMin;
+            const v = typeof p[key] === 'number' ? p[key] : yMin;
+            return Math.max(yMin, Math.min(yMax, v));
         };
         this.strokeLine(ctx, pts, now, w, h, dbOf('engineDb'), yMin, yMax, '#d47bff', 1.8);
         this.strokeLine(ctx, pts, now, w, h, dbOf('roadDb'), yMin, yMax, '#ff7a18', 1.8);
@@ -461,7 +456,10 @@ class NervCharts {
 
         this.glowLast(
             ctx, pts, now, w, h,
-            (p) => p.dbfs == null ? yMin : p.dbfs,
+            (p) => {
+                const v = typeof p.dbfs === 'number' ? p.dbfs : yMin;
+                return Math.max(yMin, Math.min(yMax, v));
+            },
             yMin, yMax,
             '#00e5ff'
         );

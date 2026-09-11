@@ -76,6 +76,8 @@ class SensorManager {
         this.vertSamples = [];
         this.horizSamples = [];
         this.motionTimes = [];
+        this.comfortRms = [];
+        this.comfortTimes = [];
         this.lastUiNotify = { acceleration: 0, noise: 0 };
 
         this.sampleTimer = null;
@@ -302,8 +304,18 @@ class SensorManager {
         const vib = this.A.dominantFrequency(this.vertSamples, sampleRate);
         const shakeRms = this.rms(this.horizSamples);
         const combinedRms = this.A.combineVibrationRms(vib.rms, shakeRms);
-        const comfort = this.A.comfortFromVibration(combinedRms, vib.freq);
         const source = this.A.classifyVibration(vib.rms, vib.peakToPeak);
+
+        this.comfortRms.push(combinedRms);
+        this.comfortTimes.push(now);
+        while (this.comfortTimes.length && now - this.comfortTimes[0] > 12000) {
+            this.comfortTimes.shift();
+            this.comfortRms.shift();
+        }
+        const comfortSpan = this.comfortTimes.length ? now - this.comfortTimes[0] : 0;
+        const comfort = comfortSpan < 3000
+            ? { label: '計測中', className: '' }
+            : this.A.comfortFromVibration(this.mean(this.comfortRms));
 
         this.accelerationData = {
             x: linX,
@@ -340,6 +352,17 @@ class SensorManager {
             sum += values[i] * values[i];
         }
         return Math.sqrt(sum / values.length);
+    }
+
+    mean(values) {
+        if (!values.length) {
+            return 0;
+        }
+        let sum = 0;
+        for (let i = 0; i < values.length; i++) {
+            sum += values[i];
+        }
+        return sum / values.length;
     }
 
     stopAccelerationTracking() {
@@ -380,7 +403,7 @@ class SensorManager {
             this.analyzer.maxDecibels = 0;
             this.analyzer.smoothingTimeConstant = 0.7;
             this.freqBuffer = new Float32Array(this.analyzer.frequencyBinCount);
-            this.timeBuffer = new Uint8Array(this.analyzer.fftSize);
+            this.timeBuffer = new Float32Array(this.analyzer.fftSize);
             this.microphone = this.audioContext.createMediaStreamSource(this.mediaStream);
             this.microphone.connect(this.analyzer);
             this.processNoiseData();
@@ -397,7 +420,7 @@ class SensorManager {
         }
 
         this.analyzer.getFloatFrequencyData(this.freqBuffer);
-        this.analyzer.getByteTimeDomainData(this.timeBuffer);
+        this.analyzer.getFloatTimeDomainData(this.timeBuffer);
 
         const dbfs = this.A.dbfsFromTimeDomain(this.timeBuffer);
         const bands = this.A.audioBands(
@@ -608,6 +631,8 @@ class SensorManager {
         this.vertSamples = [];
         this.horizSamples = [];
         this.motionTimes = [];
+        this.comfortRms = [];
+        this.comfortTimes = [];
         this.gravityReady = false;
         this.accelerationData.lateralG = 0;
         this.longAccel = 0;
@@ -855,11 +880,11 @@ class SensorManager {
             }
 
             const analyser = audioContext.createAnalyser();
-            analyser.fftSize = 2048;
+            analyser.fftSize = 4096;
             analyser.smoothingTimeConstant = 0;
             const source = audioContext.createMediaStreamSource(stream);
             source.connect(analyser);
-            const timeBuffer = new Uint8Array(analyser.fftSize);
+            const timeBuffer = new Float32Array(analyser.fftSize);
             const started = performance.now();
             let peak = -100;
 
@@ -869,7 +894,7 @@ class SensorManager {
                         resolve();
                         return;
                     }
-                    analyser.getByteTimeDomainData(timeBuffer);
+                    analyser.getFloatTimeDomainData(timeBuffer);
                     const dbfs = this.A.dbfsFromTimeDomain(timeBuffer);
                     if (dbfs > peak) {
                         peak = dbfs;

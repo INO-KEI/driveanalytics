@@ -62,13 +62,23 @@
         return speedMps * yawRate;
     }
 
-    function dbfsFromTimeDomain(timeBytes) {
+    function dbfsFromTimeDomain(samples) {
+        const n = samples.length;
+        if (!n) {
+            return -100;
+        }
+        const isByte = samples instanceof Uint8Array;
+        let mean = 0;
+        for (let i = 0; i < n; i++) {
+            mean += isByte ? (samples[i] - 128) / 128 : samples[i];
+        }
+        mean /= n;
         let sumSq = 0;
-        for (let i = 0; i < timeBytes.length; i++) {
-            const v = (timeBytes[i] - 128) / 128;
+        for (let i = 0; i < n; i++) {
+            const v = (isByte ? (samples[i] - 128) / 128 : samples[i]) - mean;
             sumSq += v * v;
         }
-        const rms = Math.sqrt(sumSq / timeBytes.length);
+        const rms = Math.sqrt(sumSq / n);
         if (rms < 1e-8) {
             return -100;
         }
@@ -333,27 +343,21 @@
         return { kind: 'rough', label: VIB_KIND_LABEL.rough, className: 'vib-rough' };
     }
 
-    // ISO 2631-1 の快適区分を簡易適用（車内スマホは目安）
-    function comfortFromVibration(rms, freqHz) {
-        let weighted = rms;
-        if (freqHz >= 4 && freqHz <= 8) {
-            weighted *= 1.4;
-        } else if (freqHz >= 1 && freqHz < 4) {
-            weighted *= 1.15;
-        }
-
+    // 車内スマホ向け。ISO 2631-1 より閾値を緩くし、短時間の突起で判定が跳ねないようにする
+    function comfortFromVibration(rms) {
+        const weighted = rms || 0;
         let label = '快適';
         let className = 'comfort-good';
-        if (weighted >= 1.6) {
+        if (weighted >= 2.4) {
             label = '極めて不快';
             className = 'comfort-extreme';
-        } else if (weighted >= 1.0) {
+        } else if (weighted >= 1.6) {
             label = 'かなり不快';
             className = 'comfort-bad';
-        } else if (weighted >= 0.63) {
+        } else if (weighted >= 1.05) {
             label = '不快';
             className = 'comfort-bad';
-        } else if (weighted >= 0.315) {
+        } else if (weighted >= 0.55) {
             label = 'やや不快';
             className = 'comfort-mid';
         }
