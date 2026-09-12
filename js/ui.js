@@ -16,11 +16,14 @@ class UIManager {
         this.stopButton = document.getElementById('stopButton');
         this.coordinatesElement = document.getElementById('coordinates');
         this.speedElement = document.getElementById('speed');
+        this.driveEventElement = document.getElementById('drive-event');
+        this.driveModeElement = document.getElementById('drive-mode');
         this.longAccelElement = document.getElementById('long-accel');
         this.avgSpeedElement = document.getElementById('average-speed');
         this.distanceElement = document.getElementById('distance');
         this.durationElement = document.getElementById('duration');
         this.accelerationElement = document.getElementById('acceleration');
+        this.vibrationXyzElement = document.getElementById('vibration-xyz');
         this.vibrationLevelElement = document.getElementById('vibration-level');
         this.vibrationCombinedElement = document.getElementById('vibration-combined');
         this.vibrationSourceElement = document.getElementById('vibration-source');
@@ -36,6 +39,12 @@ class UIManager {
         this.engineLabel = document.getElementById('band-engine-label');
         this.roadLabel = document.getElementById('band-road-label');
         this.windLabel = document.getElementById('band-wind-label');
+        this.fineBars = {};
+        this.fineLabels = {};
+        this.A.FINE_BANDS.forEach((band) => {
+            this.fineBars[band.key] = document.getElementById('band-' + band.key);
+            this.fineLabels[band.key] = document.getElementById('band-' + band.key + '-label');
+        });
         this.tableBody = document.getElementById('track-table-body');
         this.tableScroll = document.querySelector('.table-scroll');
         this.tableEmpty = document.getElementById('track-empty');
@@ -68,6 +77,7 @@ class UIManager {
         this.refreshCalibrationStatus();
         this.updateNoiseHint();
         this.observeCockpit();
+        this.syncModeChips(this.sensorManager.getDriveMode());
     }
 
     showCompatibility() {
@@ -162,6 +172,13 @@ class UIManager {
 
         this.colorNoiseButton.addEventListener('click', () => this.setColorMode('noise'));
         this.colorVibButton.addEventListener('click', () => this.setColorMode('vib'));
+        document.querySelectorAll('.mode-chip').forEach((button) => {
+            button.addEventListener('click', () => {
+                const id = button.dataset.mode;
+                const current = this.sensorManager.getDriveMode();
+                this.sensorManager.setDriveMode(current === id ? 'unset' : id);
+            });
+        });
         this.settingsButton.addEventListener('click', () => this.openSettings());
         this.settingsClose.addEventListener('click', () => this.closeSettings());
         this.settingsPanel.addEventListener('click', (event) => {
@@ -305,6 +322,9 @@ class UIManager {
             case 'sample':
                 this.addTrackPoint(data);
                 break;
+            case 'mode':
+                this.syncModeChips(data.driveMode);
+                break;
             case 'session':
                 this.handleSession(data);
                 break;
@@ -364,6 +384,12 @@ class UIManager {
         this.coordinatesElement.textContent =
             `緯度: ${data.latitude.toFixed(6)} 経度: ${data.longitude.toFixed(6)}`;
         this.speedElement.textContent = `速度: ${(data.speed || 0).toFixed(1)} km/h`;
+        if (this.driveEventElement) {
+            this.driveEventElement.textContent = `状態: ${this.eventLabel(data.driveEvent)}`;
+        }
+        if (this.driveModeElement && data.driveMode) {
+            this.driveModeElement.textContent = `モード: ${this.modeLabel(data.driveMode)}`;
+        }
         if (this.longAccelElement) {
             const accel = data.accelMps2 || 0;
             const sign = accel > 0.05 ? '+' : '';
@@ -399,13 +425,20 @@ class UIManager {
         }
         this.pushChart({
             speed: data.speed || 0,
-            accelMps2: data.accelMps2 || 0
+            accelMps2: data.accelMps2 || 0,
+            driveEvent: data.driveEvent || 'none'
         });
     }
 
     updateAccelerationUI(data) {
         this.accelerationElement.textContent =
             `上下: ${data.vertical.toFixed(2)} 横揺れ: ${data.horizontal.toFixed(2)} m/s²`;
+        if (this.vibrationXyzElement) {
+            this.vibrationXyzElement.textContent =
+                `XYZ RMS: ${(data.xRms || 0).toFixed(2)}/${(data.yRms || 0).toFixed(2)}/${(data.zRms || 0).toFixed(2)} ` +
+                `Peak: ${(data.xPeak || 0).toFixed(2)}/${(data.yPeak || 0).toFixed(2)}/${(data.zPeak || 0).toFixed(2)} ` +
+                `Std: ${(data.xStd || 0).toFixed(2)}/${(data.yStd || 0).toFixed(2)}/${(data.zStd || 0).toFixed(2)}`;
+        }
 
         const hasSignal = Math.abs(data.vertical) > 0.01 || Math.abs(data.horizontal) > 0.01 || data.rms > 0.01 || data.shake > 0.01;
         if (!hasSignal && data.x === 0 && data.y === 0 && data.z === 0) {
@@ -519,8 +552,49 @@ class UIManager {
             this.windLabel.textContent = this.bandLabelText('wind', data.windDb, windShare, data.calibrated);
         }
         if (this.noiseDominant) {
-            const name = this.A.NOISE_DOMINANT_LABEL[data.dominant] || '--';
-            this.noiseDominant.textContent = `主因: ${name}`;
+            const group = this.A.NOISE_DOMINANT_LABEL[data.dominant] || '--';
+            const fine = this.A.NOISE_DOMINANT_LABEL[data.dominantFine] || '';
+            this.noiseDominant.textContent = fine && fine !== group && data.dominantFine && data.dominantFine !== 'none'
+                ? `主因: ${group}（${fine}）`
+                : `主因: ${group}`;
+        }
+        this.A.FINE_BANDS.forEach((band) => {
+            const share = data[band.key + 'Share'] || 0;
+            const bar = this.fineBars[band.key];
+            const label = this.fineLabels[band.key];
+            if (bar) {
+                bar.style.width = `${(share * 100).toFixed(1)}%`;
+            }
+            if (label) {
+                label.textContent = this.fineLabelText(band, data[band.key + 'Db'], share, data.calibrated);
+            }
+        });
+    }
+
+    fineLabelText(band, db, share, calibrated) {
+        const value = typeof db === 'number' ? db : -100;
+        const pct = Math.round((share || 0) * 100);
+        const unit = calibrated ? 'dB' : 'dBFS';
+        return `${band.label} ${pct}%\n${value.toFixed(1)} ${unit}`;
+    }
+
+    modeLabel(id) {
+        const found = this.A.DRIVE_MODES.find(function (mode) {
+            return mode.id === id;
+        });
+        return found ? found.label : '未設定';
+    }
+
+    eventLabel(id) {
+        return this.A.DRIVE_EVENT_LABEL[id] || '--';
+    }
+
+    syncModeChips(id) {
+        document.querySelectorAll('.mode-chip').forEach((button) => {
+            button.classList.toggle('is-active', button.dataset.mode === id);
+        });
+        if (this.driveModeElement) {
+            this.driveModeElement.textContent = `モード: ${this.modeLabel(id)}`;
         }
     }
 
@@ -574,6 +648,8 @@ class UIManager {
             <div class="spot-popup">
                 <strong>${this.A.formatClock(new Date(point.time))}</strong><br>
                 速度 ${point.speed.toFixed(1)} km/h<br>
+                モード ${this.modeLabel(point.driveMode)} / ${this.eventLabel(point.driveEvent)}<br>
+                XYZ RMS ${Number(point.xRms || 0).toFixed(2)}/${Number(point.yRms || 0).toFixed(2)}/${Number(point.zRms || 0).toFixed(2)}<br>
                 横揺れ ${point.shake.toFixed(2)} m/s²<br>
                 横G ${Math.abs(point.lateralG).toFixed(2)} G<br>
                 音圧 ${point.dbfs.toFixed(1)} ${this.noiseUnit(point.calibrated)}<br>
@@ -603,6 +679,8 @@ class UIManager {
             <td>${point.index}</td>
             <td>${this.A.formatClock(new Date(point.time))}</td>
             <td>${point.speed.toFixed(1)}</td>
+            <td>${this.modeLabel(point.driveMode)}</td>
+            <td>${this.eventLabel(point.driveEvent)}</td>
             <td class="cell-metric" style="background:${shakeTone}">${point.shake.toFixed(2)}</td>
             <td>${Math.abs(point.lateralG).toFixed(2)}</td>
             <td class="cell-metric" style="background:${noiseTone}">${point.dbfs.toFixed(1)}</td>

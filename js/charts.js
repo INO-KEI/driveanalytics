@@ -9,6 +9,7 @@ class NervCharts {
         this.hud = {
             speed: document.getElementById('hud-speed'),
             accel: document.getElementById('hud-accel'),
+            event: document.getElementById('hud-event'),
             motion: document.getElementById('hud-motion'),
             comfort: document.getElementById('hud-comfort'),
             noise: document.getElementById('hud-noise'),
@@ -50,7 +51,8 @@ class NervCharts {
             engineShare: 0,
             roadShare: 0,
             windShare: 0,
-            dominant: 'none'
+            dominant: 'none',
+            driveEvent: 'none'
         };
     }
 
@@ -88,6 +90,10 @@ class NervCharts {
             const accel = s.accelMps2 || 0;
             const sign = accel > 0.05 ? '+' : '';
             this.hud.accel.textContent = `${sign}${accel.toFixed(1)}`;
+        }
+        if (this.hud.event) {
+            const labels = (window.DriveAnalysis && window.DriveAnalysis.DRIVE_EVENT_LABEL) || {};
+            this.hud.event.textContent = labels[s.driveEvent] || '--';
         }
         if (this.hud.motion) {
             this.hud.motion.textContent = `${(s.combinedRms || 0).toFixed(2)}`;
@@ -295,6 +301,32 @@ class NervCharts {
             '#ff7a18'
         );
         this.label(ctx, `±${maxA.toFixed(1)}`, w - 52, 14, 'rgba(255,122,24,0.8)');
+        this.markDriveEvents(ctx, pts, now, w, h, maxV);
+    }
+
+    markDriveEvents(ctx, pts, now, w, h, maxV) {
+        const colors = {
+            stop: '#8a8a8a',
+            launch: '#39ff50',
+            cruise: '#4db8ff',
+            accel: '#ffd24d',
+            brake: '#ff3b30'
+        };
+        let last = null;
+        pts.forEach((p) => {
+            const event = p.driveEvent;
+            if (!event || event === 'none' || event === last) {
+                return;
+            }
+            last = event;
+            const x = this.axisX(p.t, now, w);
+            ctx.strokeStyle = colors[event] || '#ffffff';
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.moveTo(x, this.yOf(p.speed || 0, 0, maxV, h));
+            ctx.lineTo(x, h);
+            ctx.stroke();
+        });
     }
 
     strokeSegmented(ctx, points, now, w, h, getter, yMin, yMax, colorOf, width) {

@@ -100,10 +100,19 @@
         return 20 * Math.log10(peak);
     }
 
-    // 車内NVHの一次近似。帯域は重なるので完全分離ではなく目安。
+    // 車内NVH。3分類はUI用、細帯域はCSV分析用。
+    const FINE_BANDS = [
+        { key: 'boom', low: 20, high: 80, group: 'engine', label: '低周波' },
+        { key: 'power', low: 80, high: 250, group: 'engine', label: 'エンジン' },
+        { key: 'struct', low: 250, high: 500, group: 'road', label: '路面低' },
+        { key: 'tire', low: 500, high: 1600, group: 'road', label: 'ロード' },
+        { key: 'cabin', low: 1600, high: 3500, group: 'wind', label: '中高' },
+        { key: 'aero', low: 3500, high: 8000, group: 'wind', label: '風切' }
+    ];
+
     const NOISE_BANDS = {
-        engine: { low: 20, high: 400, label: 'エンジン' },
-        road: { low: 400, high: 1600, label: 'ロードノイズ' },
+        engine: { low: 20, high: 250, label: 'エンジン' },
+        road: { low: 250, high: 1600, label: 'ロードノイズ' },
         wind: { low: 1600, high: 8000, label: '風切り音' }
     };
 
@@ -111,6 +120,28 @@
         engine: 'エンジン',
         road: 'ロードノイズ',
         wind: '風切り音',
+        boom: '低周波',
+        power: 'エンジン',
+        struct: '路面低',
+        tire: 'ロード',
+        cabin: '中高',
+        aero: '風切',
+        none: '--'
+    };
+
+    const DRIVE_MODES = [
+        { id: 'unset', label: '未設定' },
+        { id: 'eco', label: 'Eco' },
+        { id: 'normal', label: 'Normal' },
+        { id: 'sport', label: 'Sport' }
+    ];
+
+    const DRIVE_EVENT_LABEL = {
+        stop: '停止',
+        launch: '発進',
+        cruise: '定常',
+        accel: '加速',
+        brake: '減速',
         none: '--'
     };
 
@@ -150,51 +181,180 @@
     }
 
     function emptyBandSplit() {
-        return {
+        const out = {
             engineDb: -100,
             roadDb: -100,
             windDb: -100,
             engineShare: 0,
             roadShare: 0,
             windShare: 0,
-            dominant: 'none'
+            dominant: 'none',
+            dominantFine: 'none'
         };
+        FINE_BANDS.forEach(function (band) {
+            out[band.key + 'Db'] = -100;
+            out[band.key + 'Share'] = 0;
+        });
+        return out;
     }
 
-    // 全体の音圧を、FFT帯域の積分パワー比でエンジン／ロード／風切に按分する
-    function splitOverallDbfs(overallDbfs, engineP, roadP, windP) {
-        const total = engineP + roadP + windP;
+    function splitFromPowers(overallDbfs, powers) {
+        const keys = Object.keys(powers);
+        let total = 0;
+        keys.forEach(function (key) {
+            total += Math.max(0, powers[key] || 0);
+        });
+        const out = {};
         if (!(total > 0) || !isFinite(overallDbfs)) {
-            return emptyBandSplit();
+            keys.forEach(function (key) {
+                out[key + 'Db'] = -100;
+                out[key + 'Share'] = 0;
+            });
+            out.dominant = 'none';
+            return out;
         }
-        const engineShare = engineP / total;
-        const roadShare = roadP / total;
-        const windShare = windP / total;
-        const toDb = function (share) {
-            return overallDbfs + 10 * Math.log10(Math.max(share, 1e-12));
-        };
-        let dominant = 'engine';
-        if (roadP >= engineP && roadP >= windP) {
-            dominant = 'road';
-        } else if (windP >= engineP && windP >= roadP) {
-            dominant = 'wind';
-        }
-        return {
-            engineDb: toDb(engineShare),
-            roadDb: toDb(roadShare),
-            windDb: toDb(windShare),
-            engineShare: engineShare,
-            roadShare: roadShare,
-            windShare: windShare,
-            dominant: dominant
-        };
+        let best = keys[0];
+        keys.forEach(function (key) {
+            const share = powers[key] / total;
+            out[key + 'Share'] = share;
+            out[key + 'Db'] = overallDbfs + 10 * Math.log10(Math.max(share, 1e-12));
+            if ((powers[key] || 0) > (powers[best] || 0)) {
+                best = key;
+            }
+        });
+        out.dominant = best;
+        return out;
+    }
+
+    function bandsFromFinePowers(overallDbfs, finePowers) {
+        const groupPowers = { engine: 0, road: 0, wind: 0 };
+        FINE_BANDS.forEach(function (band) {
+            groupPowers[band.group] += Math.max(0, finePowers[band.key] || 0);
+        });
+        const grouped = splitFromPowers(overallDbfs, groupPowers);
+        const fine = splitFromPowers(overallDbfs, finePowers);
+        const merged = emptyBandSplit();
+        Object.assign(merged, fine, grouped);
+        merged.dominantFine = fine.dominant;
+        return merged;
+    }
+
+    // 全体の音圧をFFT帯域の積分パワー比で按分する
+    function splitOverallDbfs(overallDbfs, engineP, roadP, windP) {
+        return bandsFromFinePowers(overallDbfs, {
+            boom: (engineP || 0) * 0.45,
+            power: (engineP || 0) * 0.55,
+            struct: (roadP || 0) * 0.35,
+            tire: (roadP || 0) * 0.65,
+            cabin: (windP || 0) * 0.4,
+            aero: (windP || 0) * 0.6
+        });
     }
 
     function audioBands(freqDb, sampleRate, fftSize, overallDbfs) {
-        const engineP = bandIntegratedPower(freqDb, sampleRate, fftSize, NOISE_BANDS.engine.low, NOISE_BANDS.engine.high);
-        const roadP = bandIntegratedPower(freqDb, sampleRate, fftSize, NOISE_BANDS.road.low, NOISE_BANDS.road.high);
-        const windP = bandIntegratedPower(freqDb, sampleRate, fftSize, NOISE_BANDS.wind.low, NOISE_BANDS.wind.high);
-        return splitOverallDbfs(overallDbfs, engineP, roadP, windP);
+        const finePowers = {};
+        FINE_BANDS.forEach(function (band) {
+            finePowers[band.key] = bandIntegratedPower(
+                freqDb, sampleRate, fftSize, band.low, band.high
+            );
+        });
+        return bandsFromFinePowers(overallDbfs, finePowers);
+    }
+
+    function axisStats(samples) {
+        const n = samples.length;
+        if (!n) {
+            return { mean: 0, rms: 0, peak: 0, std: 0 };
+        }
+        let sum = 0;
+        let sumSq = 0;
+        let peak = 0;
+        for (let i = 0; i < n; i++) {
+            const v = samples[i];
+            sum += v;
+            sumSq += v * v;
+            peak = Math.max(peak, Math.abs(v));
+        }
+        const mean = sum / n;
+        let varSum = 0;
+        for (let i = 0; i < n; i++) {
+            const d = samples[i] - mean;
+            varSum += d * d;
+        }
+        return {
+            mean: mean,
+            rms: Math.sqrt(sumSq / n),
+            peak: peak,
+            std: Math.sqrt(varSum / n)
+        };
+    }
+
+    function classifyDriveEvent(speedKmh, accelMps2, trace, prev) {
+        const speed = speedKmh || 0;
+        const accel = accelMps2 || 0;
+        const recent = (trace || []).slice(-4);
+        const meanSpeed = recent.length
+            ? recent.reduce(function (sum, point) { return sum + (point.speed || 0); }, 0) / recent.length
+            : speed;
+        let speedStd = 0;
+        if (recent.length >= 3) {
+            let varSum = 0;
+            recent.forEach(function (point) {
+                const d = (point.speed || 0) - meanSpeed;
+                varSum += d * d;
+            });
+            speedStd = Math.sqrt(varSum / recent.length);
+        }
+
+        if (speed < 2.5 && meanSpeed < 4) {
+            return 'stop';
+        }
+        if (prev === 'launch' && speed >= 3 && speed < 40 && accel > 0.08) {
+            return 'launch';
+        }
+        if ((prev === 'stop' || prev === 'launch') && speed >= 3 && speed < 40 && accel > 0.12) {
+            return 'launch';
+        }
+        if (speed >= 22 && Math.abs(accel) < 0.45 && speedStd < 4) {
+            return 'cruise';
+        }
+        if (accel >= 0.55) {
+            return 'accel';
+        }
+        if (accel <= -0.6) {
+            return 'brake';
+        }
+        if (speed < 5) {
+            return 'stop';
+        }
+        if (prev && prev !== 'none') {
+            return prev;
+        }
+        return speed >= 22 ? 'cruise' : 'accel';
+    }
+
+    function pickDriveEvent(current, trace, since) {
+        const event = current || 'none';
+        if (event === 'stop') {
+            return 'stop';
+        }
+        let hadStop = false;
+        let hadLaunch = false;
+        (trace || []).forEach(function (item) {
+            if (item.t < since) {
+                return;
+            }
+            if (item.event === 'stop') {
+                hadStop = true;
+            }
+            if (item.event === 'launch') {
+                hadLaunch = true;
+            }
+        });
+        if (hadStop && hadLaunch) {
+            return 'launch';
+        }
+        return event;
     }
 
     // ナビ音声・会話らしい区間。完全除去ではなく除外判定用
@@ -431,6 +591,10 @@
     }
 
     function buildTrackCsv(summary, points) {
+        const fineKeys = [];
+        FINE_BANDS.forEach(function (band) {
+            fineKeys.push(band.key + '_db', band.key + '_share');
+        });
         const lines = [
             '# DriveAnalytics',
             `# started_at,${summary.startedAt ? new Date(summary.startedAt).toISOString() : ''}`,
@@ -438,7 +602,8 @@
             `# distance_km,${numCell((summary.distanceM || 0) / 1000, 3)}`,
             `# average_speed_kmh,${numCell(summary.averageSpeed || 0, 2)}`,
             `# quietness,${summary.quietness == null ? '' : summary.quietness}`,
-            '# noise_bands,engine 20-400Hz,road 400-1600Hz,wind 1600-8000Hz',
+            `# drive_mode,${summary.driveMode || ''}`,
+            '# noise_bands,boom 20-80Hz,power 80-250Hz,struct 250-500Hz,tire 500-1600Hz,cabin 1600-3500Hz,aero 3500-8000Hz',
             `# points,${points.length}`,
             [
                 'index',
@@ -450,9 +615,21 @@
                 'speed_kmh',
                 'avg_speed_kmh',
                 'distance_m',
+                'drive_mode',
+                'drive_event',
                 'rms_ms2',
                 'shake_ms2',
                 'combined_rms_ms2',
+                'x_rms',
+                'y_rms',
+                'z_rms',
+                'x_peak',
+                'y_peak',
+                'z_peak',
+                'x_std',
+                'y_std',
+                'z_std',
+                'vert_peak',
                 'lateral_g',
                 'freq_hz',
                 'comfort',
@@ -465,12 +642,18 @@
                 'road_share',
                 'wind_share',
                 'dominant_noise',
+                'dominant_fine'
+            ].concat(fineKeys).concat([
                 'voice',
                 'calibrated'
-            ].join(',')
+            ]).join(',')
         ];
         points.forEach((point) => {
             const when = new Date(point.time);
+            const fineVals = [];
+            FINE_BANDS.forEach(function (band) {
+                fineVals.push(numCell(point[band.key + 'Db'], 2), numCell(point[band.key + 'Share'], 3));
+            });
             lines.push([
                 point.index,
                 csvCell(formatClock(when)),
@@ -481,9 +664,21 @@
                 numCell(point.speed, 2),
                 numCell(point.avgSpeed, 2),
                 numCell(point.distanceM, 1),
+                csvCell(point.driveMode || ''),
+                csvCell(point.driveEvent || ''),
                 numCell(point.rms, 3),
                 numCell(point.shake, 3),
                 numCell(point.combinedRms, 3),
+                numCell(point.xRms, 3),
+                numCell(point.yRms, 3),
+                numCell(point.zRms, 3),
+                numCell(point.xPeak, 3),
+                numCell(point.yPeak, 3),
+                numCell(point.zPeak, 3),
+                numCell(point.xStd, 3),
+                numCell(point.yStd, 3),
+                numCell(point.zStd, 3),
+                numCell(point.peak, 3),
                 numCell(point.lateralG, 3),
                 numCell(point.freq, 2),
                 csvCell(point.voice ? '音声除外' : (point.comfort || '')),
@@ -496,9 +691,11 @@
                 numCell(point.roadShare, 3),
                 numCell(point.windShare, 3),
                 csvCell(point.dominant || ''),
+                csvCell(point.dominantFine || '')
+            ].concat(fineVals).concat([
                 point.voice ? 1 : 0,
                 point.calibrated ? 1 : 0
-            ].join(','));
+            ]).join(','));
         });
         return lines.join('\r\n');
     }
@@ -513,10 +710,17 @@
         longitudinalAccel,
         corneringAccel,
         dbfsFromTimeDomain,
+        FINE_BANDS,
         NOISE_BANDS,
         NOISE_DOMINANT_LABEL,
+        DRIVE_MODES,
+        DRIVE_EVENT_LABEL,
         audioBands,
         splitOverallDbfs,
+        bandsFromFinePowers,
+        axisStats,
+        classifyDriveEvent,
+        pickDriveEvent,
         speechLikelihood,
         quietnessScore,
         dominantFrequency,

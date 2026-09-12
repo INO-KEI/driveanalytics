@@ -41,6 +41,10 @@
                         <span class="panel-code">MAP</span>
                         <button type="button" id="colorNoise" class="chip is-active">音圧</button>
                         <button type="button" id="colorVib" class="chip">振幅</button>
+                        <span class="toolbar-gap"></span>
+                        <button type="button" id="modeEco" class="chip mode-chip" data-mode="eco">Eco</button>
+                        <button type="button" id="modeNormal" class="chip mode-chip" data-mode="normal">Normal</button>
+                        <button type="button" id="modeSport" class="chip mode-chip" data-mode="sport">Sport</button>
                     </div>
                     <div id="map"></div>
                 </section>
@@ -52,6 +56,7 @@
                             <span class="graph-title">速度</span>
                             <span class="legend"><i class="lg-green"></i>km/h</span>
                             <span class="legend"><i class="lg-accel"></i>加速</span>
+                            <b id="hud-event">--</b>
                             <b id="hud-accel">--</b>
                             <b id="hud-speed" class="hud-push">-- km/h</b>
                         </div>
@@ -93,6 +98,8 @@
                         <h3>走行</h3>
                         <div id="coordinates">緯度: -- 経度: --</div>
                         <div id="speed">速度: -- km/h</div>
+                        <div id="drive-event">状態: --</div>
+                        <div id="drive-mode">モード: 未設定</div>
                         <div id="long-accel">加速: -- m/s²</div>
                         <div id="average-speed">平均速度: -- km/h</div>
                         <div id="distance">走行距離: -- km</div>
@@ -101,6 +108,7 @@
                     <div class="sensor-box" id="vibration-data">
                         <h3>振動</h3>
                         <div id="acceleration">上下: -- 横揺れ: --</div>
+                        <div id="vibration-xyz">XYZ RMS: -- Peak: -- Std: --</div>
                         <div id="vibration-combined">合成 RMS: --</div>
                         <div id="vibration-level">上下 RMS: --</div>
                         <div id="vibration-source">要因: --</div>
@@ -117,7 +125,7 @@
                         <div id="noise-dominant">主因: --</div>
                         <div id="voice-flag" class="hint" hidden>ナビ/会話を検出。この瞬間は静粛性から除外しています。</div>
                         <p class="hint" id="noise-hint">未校正です。同一端末での車種比較向けです。</p>
-                        <p class="hint">マイク波形をFFTし、周波数帯のパワー比で全体の音圧を分解しています。帯域は重なるため目安です。</p>
+                        <p class="hint">マイク波形をFFTし、20–80 / 80–250 / 250–500 / 500–1600 / 1600–3500 / 3500–8000 Hz のパワー比で全体の音圧を分解しています。上段は3分類、下段は細帯域です。</p>
                         <div class="band-mix">
                             <div class="band-mix-track">
                                 <div id="band-engine" class="band-fill engine"></div>
@@ -128,6 +136,22 @@
                                 <div class="band-label" id="band-engine-label">エンジン --</div>
                                 <div class="band-label" id="band-road-label">ロードノイズ --</div>
                                 <div class="band-label" id="band-wind-label">風切り音 --</div>
+                            </div>
+                            <div class="band-mix-track fine">
+                                <div id="band-boom" class="band-fill boom"></div>
+                                <div id="band-power" class="band-fill power"></div>
+                                <div id="band-struct" class="band-fill struct"></div>
+                                <div id="band-tire" class="band-fill tire"></div>
+                                <div id="band-cabin" class="band-fill cabin"></div>
+                                <div id="band-aero" class="band-fill aero"></div>
+                            </div>
+                            <div class="band-mix-legend fine">
+                                <div class="band-label" id="band-boom-label">低周波 --</div>
+                                <div class="band-label" id="band-power-label">エンジン --</div>
+                                <div class="band-label" id="band-struct-label">路面低 --</div>
+                                <div class="band-label" id="band-tire-label">ロード --</div>
+                                <div class="band-label" id="band-cabin-label">中高 --</div>
+                                <div class="band-label" id="band-aero-label">風切 --</div>
                             </div>
                         </div>
                     </div>
@@ -150,6 +174,8 @@
                                     <th>#</th>
                                     <th>時刻</th>
                                     <th>速度<br>km/h</th>
+                                    <th>モード</th>
+                                    <th>状態</th>
                                     <th>横揺れ<br>m/s²</th>
                                     <th>横G</th>
                                     <th>音圧</th>
