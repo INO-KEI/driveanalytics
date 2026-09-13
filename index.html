@@ -66,10 +66,9 @@
                         <div class="graph-hud">
                             <span class="panel-code">VIB</span>
                             <span class="graph-title">振動</span>
-                            <span class="legend"><i class="lg-yellow"></i>振幅</span>
-                            <span class="legend"><i class="lg-peak"></i>振れ幅</span>
-                            <span class="legend"><i class="lg-impact"></i>乗上</span>
-                            <span class="legend"><i class="lg-freq"></i>Hz</span>
+                            <span class="legend"><i class="lg-yellow"></i>継続振動</span>
+                            <span class="legend"><i class="lg-peak"></i>Shake</span>
+                            <span class="legend"><i class="lg-impact"></i>Impact</span>
                             <b id="hud-comfort" class="hud-push comfort-chip">--</b>
                             <b id="hud-motion">--</b>
                         </div>
@@ -79,11 +78,6 @@
                         <div class="graph-hud">
                             <span class="panel-code">SPL</span>
                             <span class="graph-title">静粛 / 音圧</span>
-                            <span class="legend"><i class="lg-green"></i>静粛</span>
-                            <span class="legend"><i class="lg-cyan"></i>音圧</span>
-                            <span class="legend"><i class="lg-engine"></i>エン</span>
-                            <span class="legend"><i class="lg-road"></i>ロード</span>
-                            <span class="legend"><i class="lg-wind"></i>風</span>
                             <b id="hud-noise-src" class="hud-src">--</b>
                             <b id="hud-noise" class="hud-push">--</b>
                         </div>
@@ -92,13 +86,46 @@
                 </section>
             </section>
 
+            <section id="score-triad" class="score-triad">
+                <article class="score-card">
+                    <div class="score-name">Quietness</div>
+                    <div class="score-value" id="score-quietness">--</div>
+                    <div class="score-unit">/ 100</div>
+                </article>
+                <article class="score-card">
+                    <div class="score-name">Ride Comfort</div>
+                    <div class="score-value" id="score-ride">--</div>
+                    <div class="score-unit">/ 100</div>
+                </article>
+                <article class="score-card">
+                    <div class="score-name">Powertrain Smoothness</div>
+                    <div class="score-value" id="score-powertrain">--</div>
+                    <div class="score-unit">/ 100</div>
+                </article>
+            </section>
+
+            <section id="vehicle-character" class="vehicle-character">
+                <h3>Vehicle Character</h3>
+                <dl class="character-grid">
+                    <div><dt>Low-speed shake</dt><dd id="char-low-shake">--</dd></div>
+                    <div><dt>Cruising stability</dt><dd id="char-cruise">--</dd></div>
+                    <div><dt>Powertrain transitions</dt><dd id="char-pt">--</dd></div>
+                    <div><dt>Road noise</dt><dd id="char-road">--</dd></div>
+                    <div><dt>Wind noise</dt><dd id="char-wind">--</dd></div>
+                    <div><dt>Low-speed powertrain</dt><dd id="char-low-pt">--</dd></div>
+                </dl>
+                <div id="drive-comments" class="drive-comments">計測を停止すると、走行の特徴コメントを表示します。</div>
+            </section>
+
             <section class="detail-deck">
                 <div id="sensors">
                     <div class="sensor-box" id="location-data">
                         <h3>走行</h3>
                         <div id="coordinates">緯度: -- 経度: --</div>
                         <div id="speed">速度: -- km/h</div>
+                        <div id="gps-quality">GPS: --</div>
                         <div id="drive-event">状態: --</div>
+                        <div id="engine-state">パワートレーン: --</div>
                         <div id="drive-mode">モード: 未設定</div>
                         <div id="long-accel">加速: -- m/s²</div>
                         <div id="average-speed">平均速度: -- km/h</div>
@@ -115,45 +142,57 @@
                         <div id="vibration-freq">卓越周波数: -- Hz</div>
                         <div id="comfort">判定: --</div>
                         <div id="lateral-g">横G（コーナリング）: -- G</div>
-                        <div id="lateral-shake">横揺れ RMS: --</div>
-                        <p class="hint">判定は直近約12秒の平均です。縮尺は 0–2.0 m/s² 固定で、下側の持続揺れはエンジン・軽い路面、赤い尖りは継ぎ目・マンホールなどの乗り上げです。</p>
+                        <div id="lateral-shake">Shake: --</div>
+                        <div id="ride-split">Ride: 振動 -- / Shake -- / Impact -- / 安定 --</div>
+                        <p class="hint">継続振動（RMS）とShakeは別指標です。停止→発進→10〜20km/h の変化を重点的に見ます。</p>
                     </div>
                     <div class="sensor-box" id="noise-data">
-                        <h3>音圧・静粛性</h3>
-                        <div id="noise-level">音圧: --</div>
-                        <div id="quietness">静粛性: -- / 100</div>
-                        <div id="noise-dominant">主因: --</div>
+                        <h3>音・騒音特性</h3>
+                        <div id="noise-level">相対音量: --</div>
+                        <div id="quietness">Quietness: -- / 100</div>
+                        <div id="noise-independent">Engine -- / Road -- / Wind --</div>
+                        <div id="ev-likelihood">EV-like: --</div>
+                        <div id="noise-dominant" hidden>主因: --</div>
                         <div id="voice-flag" class="hint" hidden>ナビ/会話を検出。この瞬間は静粛性から除外しています。</div>
-                        <p class="hint" id="noise-hint">未校正です。同一端末での車種比較向けです。</p>
-                        <p class="hint">マイク波形をFFTし、20–80 / 80–250 / 250–500 / 500–1600 / 1600–3500 / 3500–8000 Hz のパワー比で全体の音圧を分解しています。上段は3分類、下段は細帯域です。</p>
-                        <div class="band-mix">
-                            <div class="band-mix-track">
-                                <div id="band-engine" class="band-fill engine"></div>
-                                <div id="band-road" class="band-fill road"></div>
-                                <div id="band-wind" class="band-fill wind"></div>
-                            </div>
-                            <div class="band-mix-legend">
-                                <div class="band-label" id="band-engine-label">エンジン --</div>
-                                <div class="band-label" id="band-road-label">ロードノイズ --</div>
-                                <div class="band-label" id="band-wind-label">風切り音 --</div>
-                            </div>
-                            <div class="band-mix-track fine">
-                                <div id="band-boom" class="band-fill boom"></div>
-                                <div id="band-power" class="band-fill power"></div>
-                                <div id="band-struct" class="band-fill struct"></div>
-                                <div id="band-tire" class="band-fill tire"></div>
-                                <div id="band-cabin" class="band-fill cabin"></div>
-                                <div id="band-aero" class="band-fill aero"></div>
-                            </div>
-                            <div class="band-mix-legend fine">
-                                <div class="band-label" id="band-boom-label">低周波 --</div>
-                                <div class="band-label" id="band-power-label">エンジン --</div>
-                                <div class="band-label" id="band-struct-label">路面低 --</div>
-                                <div class="band-label" id="band-tire-label">ロード --</div>
-                                <div class="band-label" id="band-cabin-label">中高 --</div>
-                                <div class="band-label" id="band-aero-label">風切 --</div>
-                            </div>
+                        <p class="hint" id="noise-hint">未校正です。表示は Relative Sound Level で、絶対音圧(dB SPL)ではありません。</p>
+                        <p class="hint">Engine / Road / Wind は独立スコアです。合計100%にはしません。</p>
+                        <div class="score-bars">
+                            <div class="score-bar-row"><span>Engine</span><div class="band-track"><div id="score-engine-fill" class="band-fill engine"></div></div><b id="score-engine-label">--</b></div>
+                            <div class="score-bar-row"><span>Road</span><div class="band-track"><div id="score-road-fill" class="band-fill road"></div></div><b id="score-road-label">--</b></div>
+                            <div class="score-bar-row"><span>Wind</span><div class="band-track"><div id="score-wind-fill" class="band-fill wind"></div></div><b id="score-wind-label">--</b></div>
                         </div>
+                        <details class="legacy-noise">
+                            <summary>Legacy 騒音分類（検証用）</summary>
+                            <p class="hint">旧ロジックの 20–250Hz 中心配分です。UIの主判定には使いません。</p>
+                            <div class="band-mix">
+                                <div class="band-mix-track">
+                                    <div id="band-engine" class="band-fill engine"></div>
+                                    <div id="band-road" class="band-fill road"></div>
+                                    <div id="band-wind" class="band-fill wind"></div>
+                                </div>
+                                <div class="band-mix-legend">
+                                    <div class="band-label" id="band-engine-label">エンジン --</div>
+                                    <div class="band-label" id="band-road-label">ロードノイズ --</div>
+                                    <div class="band-label" id="band-wind-label">風切り音 --</div>
+                                </div>
+                                <div class="band-mix-track fine">
+                                    <div id="band-boom" class="band-fill boom"></div>
+                                    <div id="band-power" class="band-fill power"></div>
+                                    <div id="band-struct" class="band-fill struct"></div>
+                                    <div id="band-tire" class="band-fill tire"></div>
+                                    <div id="band-cabin" class="band-fill cabin"></div>
+                                    <div id="band-aero" class="band-fill aero"></div>
+                                </div>
+                                <div class="band-mix-legend fine">
+                                    <div class="band-label" id="band-boom-label">低周波 --</div>
+                                    <div class="band-label" id="band-power-label">エンジン --</div>
+                                    <div class="band-label" id="band-struct-label">路面低 --</div>
+                                    <div class="band-label" id="band-tire-label">ロード --</div>
+                                    <div class="band-label" id="band-cabin-label">中高 --</div>
+                                    <div class="band-label" id="band-aero-label">風切 --</div>
+                                </div>
+                            </div>
+                        </details>
                     </div>
                 </div>
 
@@ -165,7 +204,7 @@
                             <button type="button" id="csvMail" disabled>メールで送る</button>
                         </div>
                     </div>
-                    <p id="track-empty" class="hint">計測を開始すると、1秒ごとの地点が地図と表に残ります。行をタップすると地図の該当スポットを開けます。</p>
+                    <p id="track-empty" class="hint">計測を開始すると、1秒ごとの地点が地図と表に残ります。CSVには Legacy と New Model の両方が入ります。</p>
                     <p class="hint" id="export-hint">1秒ごとに1行です。表は直近400件、全件はCSVに入ります。画面を付けたままならデータ上は8〜12時間、電池とバックグラウンド制限で2〜4時間が目安です。</p>
                     <div class="table-scroll">
                         <table id="track-table">
@@ -176,13 +215,13 @@
                                     <th>速度<br>km/h</th>
                                     <th>モード</th>
                                     <th>状態</th>
-                                    <th>横揺れ<br>m/s²</th>
-                                    <th>横G</th>
-                                    <th>音圧</th>
-                                    <th>エンジン<br>dB</th>
-                                    <th>ロード<br>dB</th>
-                                    <th>風<br>dB</th>
-                                    <th>振動判定</th>
+                                    <th>Shake</th>
+                                    <th>振動</th>
+                                    <th>相対音量</th>
+                                    <th>Eng P</th>
+                                    <th>Q</th>
+                                    <th>Ride</th>
+                                    <th>PT</th>
                                 </tr>
                             </thead>
                             <tbody id="track-table-body"></tbody>
@@ -190,6 +229,7 @@
                     </div>
                 </section>
             </section>
+            <pre id="debug-panel" class="debug-panel" hidden></pre>
         </main>
     </div>
 
@@ -222,6 +262,7 @@
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script src="js/app.js"></script>
     <script src="js/analysis.js"></script>
+    <script src="js/vehicle.js"></script>
     <script src="js/sensors.js"></script>
     <script src="js/charts.js"></script>
     <script src="js/ui.js"></script>

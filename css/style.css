@@ -661,3 +661,129 @@ button:disabled {
     }
     .hdr-sys { display: none; }
 }
+
+.score-triad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    padding: 8px 8px 0;
+}
+
+.score-card {
+    background: var(--panel);
+    border: 1px solid var(--orange-dim);
+    padding: 0.7rem 0.45rem;
+    text-align: center;
+}
+
+.score-name {
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    color: var(--orange);
+    margin-bottom: 0.2rem;
+}
+
+.score-value {
+    font-size: 1.55rem;
+    color: var(--green);
+    line-height: 1.1;
+}
+
+.score-unit {
+    font-size: 0.68rem;
+    color: var(--muted);
+}
+
+.vehicle-character {
+    margin: 8px;
+    background: var(--panel);
+    border: 1px solid var(--orange-dim);
+    padding: 0.7rem;
+}
+
+.vehicle-character h3 {
+    font-size: 0.8rem;
+    letter-spacing: 0.12em;
+    color: var(--orange);
+    margin-bottom: 0.45rem;
+}
+
+.character-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.45rem 0.7rem;
+}
+
+.character-grid div {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+    border-bottom: 1px solid #2a2418;
+    padding-bottom: 0.2rem;
+}
+
+.character-grid dt {
+    color: var(--muted);
+}
+
+.character-grid dd {
+    color: var(--text);
+    font-weight: 700;
+}
+
+.drive-comments {
+    margin-top: 0.6rem;
+    font-size: 0.8rem;
+    line-height: 1.55;
+    color: var(--text);
+    white-space: pre-line;
+}
+
+.score-bars {
+    margin-top: 0.45rem;
+}
+
+.score-bar-row {
+    display: grid;
+    grid-template-columns: 52px 1fr 36px;
+    align-items: center;
+    gap: 0.35rem;
+    margin-bottom: 0.28rem;
+    font-size: 0.72rem;
+}
+
+.legacy-noise {
+    margin-top: 0.6rem;
+}
+
+.legacy-noise summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
+.gps-bad {
+    color: var(--red);
+    font-weight: 700;
+}
+
+.debug-panel {
+    margin: 8px;
+    padding: 0.6rem;
+    background: #0b0c09;
+    border: 1px solid var(--orange-dim);
+    color: #c8f7c0;
+    font-size: 0.68rem;
+    overflow: auto;
+    max-height: 220px;
+}
+
+@media (max-width: 720px) {
+    .character-grid {
+        grid-template-columns: 1fr;
+    }
+    .score-value {
+        font-size: 1.25rem;
+    }
+}

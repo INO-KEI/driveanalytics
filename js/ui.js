@@ -16,7 +16,9 @@ class UIManager {
         this.stopButton = document.getElementById('stopButton');
         this.coordinatesElement = document.getElementById('coordinates');
         this.speedElement = document.getElementById('speed');
+        this.gpsQualityElement = document.getElementById('gps-quality');
         this.driveEventElement = document.getElementById('drive-event');
+        this.engineStateElement = document.getElementById('engine-state');
         this.driveModeElement = document.getElementById('drive-mode');
         this.longAccelElement = document.getElementById('long-accel');
         this.avgSpeedElement = document.getElementById('average-speed');
@@ -31,6 +33,7 @@ class UIManager {
         this.comfortElement = document.getElementById('comfort');
         this.lateralElement = document.getElementById('lateral-g');
         this.shakeElement = document.getElementById('lateral-shake');
+        this.rideSplitElement = document.getElementById('ride-split');
         this.noiseLevelElement = document.getElementById('noise-level');
         this.quietnessElement = document.getElementById('quietness');
         this.engineBar = document.getElementById('band-engine');
@@ -56,6 +59,26 @@ class UIManager {
         this.noiseHint = document.getElementById('noise-hint');
         this.voiceFlag = document.getElementById('voice-flag');
         this.noiseDominant = document.getElementById('noise-dominant');
+        this.noiseIndependent = document.getElementById('noise-independent');
+        this.evLikelihoodElement = document.getElementById('ev-likelihood');
+        this.scoreQuietness = document.getElementById('score-quietness');
+        this.scoreRide = document.getElementById('score-ride');
+        this.scorePowertrain = document.getElementById('score-powertrain');
+        this.scoreEngineFill = document.getElementById('score-engine-fill');
+        this.scoreRoadFill = document.getElementById('score-road-fill');
+        this.scoreWindFill = document.getElementById('score-wind-fill');
+        this.scoreEngineLabel = document.getElementById('score-engine-label');
+        this.scoreRoadLabel = document.getElementById('score-road-label');
+        this.scoreWindLabel = document.getElementById('score-wind-label');
+        this.charLowShake = document.getElementById('char-low-shake');
+        this.charCruise = document.getElementById('char-cruise');
+        this.charPt = document.getElementById('char-pt');
+        this.charRoad = document.getElementById('char-road');
+        this.charWind = document.getElementById('char-wind');
+        this.charLowPt = document.getElementById('char-low-pt');
+        this.driveComments = document.getElementById('drive-comments');
+        this.debugPanel = document.getElementById('debug-panel');
+        this.debugMode = new URLSearchParams(window.location.search).get('debug') === '1';
         this.settingsButton = document.getElementById('settingsButton');
         this.settingsPanel = document.getElementById('settings-panel');
         this.settingsClose = document.getElementById('settingsClose');
@@ -78,6 +101,9 @@ class UIManager {
         this.updateNoiseHint();
         this.observeCockpit();
         this.syncModeChips(this.sensorManager.getDriveMode());
+        if (this.debugPanel && this.debugMode) {
+            this.debugPanel.hidden = false;
+        }
     }
 
     showCompatibility() {
@@ -235,8 +261,8 @@ class UIManager {
             return;
         }
         this.noiseHint.textContent = this.sensorManager.isCalibrated()
-            ? 'カスタネット基準です。0 dB は校正音と同じ大きさです。'
-            : '未校正です。0 dB はマイクが振り切れる大きさで、無音でも端末ノイズで下の方に線が出ます。同一端末での車種比較向けです。';
+            ? '校正済みです。0 dB は校正音と同じ大きさです。未校正時のような絶対音圧(dB SPL)ではありません。'
+            : '未校正です。表示は Relative Sound Level（相対音量）です。XX dB を絶対音圧として解釈しないでください。';
     }
 
     async runCalibration() {
@@ -298,7 +324,7 @@ class UIManager {
     }
 
     noiseUnit(calibrated) {
-        return calibrated ? 'dB（校正基準比）' : 'dBFS（相対）';
+        return calibrated ? 'dB（校正基準比）' : 'Relative Sound Level';
     }
 
     setColorMode(mode) {
@@ -357,8 +383,17 @@ class UIManager {
         if (this.durationElement && data.elapsedMs != null) {
             this.durationElement.textContent = `計測時間: ${this.A.formatDuration(data.elapsedMs)}`;
         }
-        if (this.quietnessElement && data.quietness != null) {
-            this.quietnessElement.textContent = `静粛性: ${data.quietness} / 100`;
+        if (this.quietnessElement && data.quietnessScore != null) {
+            this.quietnessElement.textContent = `Quietness: ${data.quietnessScore} / 100`;
+        } else if (this.quietnessElement && data.quietness != null) {
+            this.quietnessElement.textContent = `Quietness: ${data.quietness} / 100`;
+        }
+        this.updateScoreCards(data);
+        if (data.state === 'stopped') {
+            this.renderCharacter(data);
+        }
+        if (data.state === 'started') {
+            this.clearCharacter();
         }
         this.setExportEnabled(this.sensorManager.getRecordedPoints().length > 0);
     }
@@ -374,6 +409,7 @@ class UIManager {
         if (this.charts) {
             this.charts.clear();
         }
+        this.clearCharacter();
         if (this.marker) {
             this.map.removeLayer(this.marker);
             this.marker = null;
@@ -383,9 +419,21 @@ class UIManager {
     updateLocationUI(data) {
         this.coordinatesElement.textContent =
             `緯度: ${data.latitude.toFixed(6)} 経度: ${data.longitude.toFixed(6)}`;
-        this.speedElement.textContent = `速度: ${(data.speed || 0).toFixed(1)} km/h`;
+        this.speedElement.textContent = `速度: ${(data.filteredSpeed != null ? data.filteredSpeed : data.speed || 0).toFixed(1)} km/h`;
+        if (this.gpsQualityElement) {
+            const valid = data.gpsValid !== false;
+            const conf = data.gpsConfidence != null ? data.gpsConfidence : (valid ? 1 : 0);
+            this.gpsQualityElement.textContent = valid
+                ? `GPS: 有効 (${(conf * 100).toFixed(0)}%)`
+                : `GPS: 除外 (raw ${(data.rawSpeed || 0).toFixed(0)} km/h)`;
+            this.gpsQualityElement.className = valid ? '' : 'gps-bad';
+        }
         if (this.driveEventElement) {
-            this.driveEventElement.textContent = `状態: ${this.eventLabel(data.driveEvent)}`;
+            this.driveEventElement.textContent = `状態: ${this.eventLabel(data.drivingState || data.driveEvent)}`;
+        }
+        if (this.engineStateElement && data.vehicle) {
+            this.engineStateElement.textContent =
+                `パワートレーン: ${this.engineStateLabel(data.vehicle.engineState)} / p=${(data.vehicle.engineProbability || 0).toFixed(2)}`;
         }
         if (this.driveModeElement && data.driveMode) {
             this.driveModeElement.textContent = `モード: ${this.modeLabel(data.driveMode)}`;
@@ -426,8 +474,11 @@ class UIManager {
         this.pushChart({
             speed: data.speed || 0,
             accelMps2: data.accelMps2 || 0,
-            driveEvent: data.driveEvent || 'none'
+            driveEvent: data.driveEvent || 'none',
+            drivingState: data.drivingState || data.driveEvent || 'none'
         });
+        this.updateScoreCards(data);
+        this.updateDebug(data.vehicle);
     }
 
     updateAccelerationUI(data) {
@@ -469,38 +520,57 @@ class UIManager {
         this.comfortElement.textContent = `判定: ${data.comfort}`;
         this.comfortElement.className = data.comfortClass || '';
         this.lateralElement.textContent = `横G（コーナリング）: ${Math.abs(data.lateralG || 0).toFixed(2)} G`;
-        this.shakeElement.textContent = `横揺れ RMS: ${(data.shake || 0).toFixed(2)} m/s²`;
+        this.shakeElement.textContent = `Shake: ${(data.shake || 0).toFixed(2)} m/s²`;
+        const vehicle = this.sensorManager.vehicle ? this.sensorManager.vehicle.getSnapshot() : null;
+        if (this.rideSplitElement && vehicle) {
+            this.rideSplitElement.textContent =
+                `Ride: 振動 ${vehicle.rideVibrationScore.toFixed(0)} / Shake ${vehicle.rideShakeScore.toFixed(0)} / Impact ${vehicle.rideImpactScore.toFixed(0)} / 安定 ${vehicle.rideStabilityScore.toFixed(0)}`;
+        }
         this.pushChart({
             rms: data.rms || 0,
             shake: data.shake || 0,
-            combinedRms: data.combinedRms || 0,
+            combinedRms: vehicle ? vehicle.continuousVibration : (data.combinedRms || 0),
             peak: data.peak || 0,
             freq: data.freq || 0,
             comfort: data.comfort || '',
             comfortClass: data.comfortClass || '',
             vibKind: data.vibKind || 'none',
             vibLabel: data.vibLabel || '',
-            vibClass: data.vibClass || ''
+            vibClass: data.vibClass || '',
+            impactScore: vehicle ? vehicle.impactScore : 0,
+            impactEvent: vehicle ? vehicle.impactEvent : false
         });
+        this.updateScoreCards({ vehicle: vehicle });
+        this.updateDebug(vehicle);
     }
 
     updateNoiseUI(data) {
         const unit = this.noiseUnit(data.calibrated);
-        this.noiseLevelElement.textContent = `音圧: ${data.dbfs.toFixed(1)} ${unit}`;
-        if (data.quietness != null) {
-            this.quietnessElement.textContent = `静粛性: ${data.quietness} / 100`;
+        this.noiseLevelElement.textContent = data.calibrated
+            ? `音圧: ${data.dbfs.toFixed(1)} ${unit}`
+            : `相対音量: ${data.dbfs.toFixed(1)} ${unit}`;
+        const vehicle = this.sensorManager.vehicle ? this.sensorManager.vehicle.getSnapshot() : null;
+        if (vehicle && vehicle.quietnessScore != null) {
+            this.quietnessElement.textContent = `Quietness: ${vehicle.quietnessScore} / 100`;
+        } else if (data.quietness != null) {
+            this.quietnessElement.textContent = `Quietness: ${data.quietness} / 100`;
         } else {
-            this.quietnessElement.textContent = '静粛性: 走行中に算出';
+            this.quietnessElement.textContent = 'Quietness: 走行中に算出';
         }
         this.updateNoiseHint();
         if (this.voiceFlag) {
             this.voiceFlag.hidden = !data.voiceDetected;
         }
+        if (this.evLikelihoodElement && vehicle) {
+            this.evLikelihoodElement.textContent =
+                `EV-like: ${Math.round((vehicle.evLikelihood || 0) * 100)}% / ${this.engineStateLabel(vehicle.engineState)}`;
+        }
 
+        this.setIndependentNoise(vehicle);
         this.setBandMix(data);
         this.pushChart({
             dbfs: data.dbfs,
-            quietness: data.quietness,
+            quietness: vehicle && vehicle.quietnessScore != null ? vehicle.quietnessScore : data.quietness,
             voice: data.voiceDetected,
             calibrated: data.calibrated,
             engineDb: data.engineDb,
@@ -509,8 +579,14 @@ class UIManager {
             engineShare: data.engineShare,
             roadShare: data.roadShare,
             windShare: data.windShare,
-            dominant: data.dominant
+            engineNoiseScore: vehicle ? vehicle.engineNoiseScore : 0,
+            roadNoiseScore: vehicle ? vehicle.roadNoiseScore : 0,
+            windNoiseScore: vehicle ? vehicle.windNoiseScore : 0,
+            dominant: data.dominant,
+            engineState: vehicle ? vehicle.engineState : 'UNKNOWN'
         });
+        this.updateScoreCards({ vehicle: vehicle });
+        this.updateDebug(vehicle);
     }
 
     bandLabelText(key, db, share, calibrated) {
@@ -586,7 +662,122 @@ class UIManager {
     }
 
     eventLabel(id) {
+        const vehicleLabels = window.DriveVehicle && window.DriveVehicle.DRIVING_STATE_LABEL;
+        if (vehicleLabels && vehicleLabels[id]) {
+            return vehicleLabels[id];
+        }
         return this.A.DRIVE_EVENT_LABEL[id] || '--';
+    }
+
+    engineStateLabel(id) {
+        if (id === 'ENGINE_ON') {
+            return 'ENGINE ON';
+        }
+        if (id === 'ENGINE_OFF') {
+            return 'ENGINE OFF';
+        }
+        return 'UNKNOWN';
+    }
+
+    setIndependentNoise(vehicle) {
+        if (!vehicle) {
+            return;
+        }
+        const e = Math.round(vehicle.engineNoiseScore || 0);
+        const r = Math.round(vehicle.roadNoiseScore || 0);
+        const w = Math.round(vehicle.windNoiseScore || 0);
+        if (this.noiseIndependent) {
+            this.noiseIndependent.textContent = `Engine ${e} / Road ${r} / Wind ${w}`;
+        }
+        if (this.scoreEngineFill) {
+            this.scoreEngineFill.style.width = `${e}%`;
+        }
+        if (this.scoreRoadFill) {
+            this.scoreRoadFill.style.width = `${r}%`;
+        }
+        if (this.scoreWindFill) {
+            this.scoreWindFill.style.width = `${w}%`;
+        }
+        if (this.scoreEngineLabel) {
+            this.scoreEngineLabel.textContent = String(e);
+        }
+        if (this.scoreRoadLabel) {
+            this.scoreRoadLabel.textContent = String(r);
+        }
+        if (this.scoreWindLabel) {
+            this.scoreWindLabel.textContent = String(w);
+        }
+    }
+
+    updateScoreCards(data) {
+        const vehicle = data && data.vehicle
+            ? data.vehicle
+            : (this.sensorManager.vehicle ? this.sensorManager.vehicle.getSnapshot() : null);
+        const quiet = data && data.quietnessScore != null
+            ? data.quietnessScore
+            : (vehicle && vehicle.quietnessScore);
+        const ride = data && data.rideComfortScore != null
+            ? data.rideComfortScore
+            : (vehicle && vehicle.rideComfortScore);
+        const pt = data && data.powertrainSmoothnessScore != null
+            ? data.powertrainSmoothnessScore
+            : (vehicle && vehicle.powertrainSmoothnessScore);
+        if (this.scoreQuietness && quiet != null) {
+            this.scoreQuietness.textContent = String(quiet);
+        }
+        if (this.scoreRide && ride != null) {
+            this.scoreRide.textContent = String(ride);
+        }
+        if (this.scorePowertrain && pt != null) {
+            this.scorePowertrain.textContent = String(pt);
+        }
+    }
+
+    renderCharacter(data) {
+        const character = data.character;
+        if (character) {
+            if (this.charLowShake) this.charLowShake.textContent = character.lowSpeedShake || '--';
+            if (this.charCruise) this.charCruise.textContent = character.cruisingStability || '--';
+            if (this.charPt) this.charPt.textContent = character.powertrainTransitions || '--';
+            if (this.charRoad) this.charRoad.textContent = character.roadNoise || '--';
+            if (this.charWind) this.charWind.textContent = character.windNoise || '--';
+            if (this.charLowPt) this.charLowPt.textContent = character.lowSpeedPowertrain || '--';
+        }
+        if (this.driveComments) {
+            this.driveComments.textContent = (data.comments && data.comments.length)
+                ? data.comments.join('\n')
+                : '特徴コメントを生成できる走行データが不足しています。';
+        }
+        this.updateScoreCards(data);
+    }
+
+    clearCharacter() {
+        [this.charLowShake, this.charCruise, this.charPt, this.charRoad, this.charWind, this.charLowPt].forEach((el) => {
+            if (el) {
+                el.textContent = '--';
+            }
+        });
+        if (this.driveComments) {
+            this.driveComments.textContent = '計測中です。停止後に車両特性コメントを表示します。';
+        }
+        if (this.scoreQuietness) this.scoreQuietness.textContent = '--';
+        if (this.scoreRide) this.scoreRide.textContent = '--';
+        if (this.scorePowertrain) this.scorePowertrain.textContent = '--';
+    }
+
+    updateDebug(vehicle) {
+        if (!this.debugMode || !this.debugPanel || !vehicle) {
+            return;
+        }
+        this.debugPanel.textContent = JSON.stringify({
+            engineProbability: vehicle.engineProbability,
+            engineState: vehicle.engineState,
+            drivingState: vehicle.drivingState,
+            powertrainTransition: vehicle.powertrainTransition,
+            gpsValid: vehicle.gpsValid,
+            filteredSpeed: vehicle.filteredSpeed,
+            factors: vehicle.engineFactors
+        }, null, 2);
     }
 
     syncModeChips(id) {
@@ -604,6 +795,14 @@ class UIManager {
         this.tableEmpty.hidden = true;
         this.setExportEnabled(true);
         this.appendTableRow(point);
+
+        this.updateScoreCards(point);
+        if (this.engineStateElement) {
+            this.engineStateElement.textContent =
+                `パワートレーン: ${this.engineStateLabel(point.engineState)} / p=${Number(point.engineProbability || 0).toFixed(2)}`;
+        }
+        this.setIndependentNoise(point);
+        this.updateDebug(point);
 
         if (this.shouldShowSpot(point)) {
             this.addSpot(point);
@@ -648,15 +847,13 @@ class UIManager {
             <div class="spot-popup">
                 <strong>${this.A.formatClock(new Date(point.time))}</strong><br>
                 速度 ${point.speed.toFixed(1)} km/h<br>
-                モード ${this.modeLabel(point.driveMode)} / ${this.eventLabel(point.driveEvent)}<br>
-                XYZ RMS ${Number(point.xRms || 0).toFixed(2)}/${Number(point.yRms || 0).toFixed(2)}/${Number(point.zRms || 0).toFixed(2)}<br>
-                横揺れ ${point.shake.toFixed(2)} m/s²<br>
-                横G ${Math.abs(point.lateralG).toFixed(2)} G<br>
-                音圧 ${point.dbfs.toFixed(1)} ${this.noiseUnit(point.calibrated)}<br>
-                エンジン ${point.engineDb.toFixed(1)} (${Math.round((point.engineShare || 0) * 100)}%) /
-                ロード ${point.roadDb.toFixed(1)} (${Math.round((point.roadShare || 0) * 100)}%) /
-                風 ${point.windDb.toFixed(1)} (${Math.round((point.windShare || 0) * 100)}%) ${this.noiseUnit(point.calibrated)}<br>
-                振動 ${point.comfort}${point.vibLabel ? ' / ' + point.vibLabel : ''}${point.voice ? '<br>ナビ/会話のため除外' : ''}
+                モード ${this.modeLabel(point.driveMode)} / ${this.eventLabel(point.drivingState || point.driveEvent)}<br>
+                GPS ${point.gpsValid ? '有効' : '除外'} / 速度 ${Number(point.filteredSpeed != null ? point.filteredSpeed : point.speed).toFixed(1)} km/h<br>
+                継続振動 ${Number(point.continuousVibration || point.combinedRms || 0).toFixed(2)} / Shake ${Number(point.shakeScore != null ? point.shakeScore : point.shake).toFixed(2)} / Impact ${Number(point.impactScore || 0).toFixed(0)}<br>
+                Engine p ${Number(point.engineProbability || 0).toFixed(2)} / ${this.engineStateLabel(point.engineState)}<br>
+                相対音量 ${point.dbfs.toFixed(1)} ${this.noiseUnit(point.calibrated)}<br>
+                Q ${point.quietnessScore == null ? '--' : point.quietnessScore} / Ride ${point.rideComfortScore == null ? '--' : point.rideComfortScore} / PT ${point.powertrainSmoothnessScore == null ? '--' : point.powertrainSmoothnessScore}<br>
+                Legacy エンジン ${Math.round((point.engineShare || 0) * 100)}% / ロード ${Math.round((point.roadShare || 0) * 100)}% / 風 ${Math.round((point.windShare || 0) * 100)}%
             </div>
         `;
     }
@@ -673,21 +870,23 @@ class UIManager {
     appendTableRow(point) {
         const tr = document.createElement('tr');
         tr.dataset.index = String(point.index);
+        const shake = point.shakeScore != null ? point.shakeScore : point.shake;
+        const vib = point.continuousVibration != null ? point.continuousVibration : point.combinedRms;
         const noiseTone = this.A.noiseColor(point.dbfs, point.calibrated);
-        const shakeTone = this.A.lateralColor(point.shake);
+        const shakeTone = this.A.lateralColor(shake);
         tr.innerHTML = `
             <td>${point.index}</td>
             <td>${this.A.formatClock(new Date(point.time))}</td>
-            <td>${point.speed.toFixed(1)}</td>
+            <td>${Number(point.filteredSpeed != null ? point.filteredSpeed : point.speed).toFixed(1)}</td>
             <td>${this.modeLabel(point.driveMode)}</td>
-            <td>${this.eventLabel(point.driveEvent)}</td>
-            <td class="cell-metric" style="background:${shakeTone}">${point.shake.toFixed(2)}</td>
-            <td>${Math.abs(point.lateralG).toFixed(2)}</td>
+            <td>${this.eventLabel(point.drivingState || point.driveEvent)}</td>
+            <td class="cell-metric" style="background:${shakeTone}">${Number(shake).toFixed(2)}</td>
+            <td>${Number(vib).toFixed(2)}</td>
             <td class="cell-metric" style="background:${noiseTone}">${point.dbfs.toFixed(1)}</td>
-            <td class="cell-metric" style="background:${this.A.noiseColor(point.engineDb, point.calibrated)}">${point.engineDb.toFixed(1)}</td>
-            <td class="cell-metric" style="background:${this.A.noiseColor(point.roadDb, point.calibrated)}">${point.roadDb.toFixed(1)}</td>
-            <td class="cell-metric" style="background:${this.A.noiseColor(point.windDb, point.calibrated)}">${point.windDb.toFixed(1)}</td>
-            <td class="${point.comfortClass || ''}">${point.voice ? '音声除外' : point.comfort}</td>
+            <td>${Number(point.engineProbability || 0).toFixed(2)}</td>
+            <td>${point.quietnessScore == null ? '--' : point.quietnessScore}</td>
+            <td>${point.rideComfortScore == null ? '--' : point.rideComfortScore}</td>
+            <td>${point.powertrainSmoothnessScore == null ? '--' : point.powertrainSmoothnessScore}</td>
         `;
         this.tableBody.appendChild(tr);
         const maxRows = 400;
@@ -728,13 +927,17 @@ class UIManager {
         const duration = this.A.formatDuration(summary.elapsedMs || 0);
         const km = ((summary.distanceM || 0) / 1000).toFixed(2);
         const avg = (summary.averageSpeed || 0).toFixed(1);
-        const quiet = summary.quietness == null ? '--' : summary.quietness;
+        const quiet = summary.quietnessScore != null ? summary.quietnessScore : summary.quietness;
+        const ride = summary.rideComfortScore == null ? '--' : summary.rideComfortScore;
+        const pt = summary.powertrainSmoothnessScore == null ? '--' : summary.powertrainSmoothnessScore;
         return [
             'DriveAnalytics 計測データです。',
             `計測時間: ${duration}`,
             `走行距離: ${km} km`,
             `平均速度: ${avg} km/h`,
-            `静粛性: ${quiet} / 100`,
+            `Quietness: ${quiet == null ? '--' : quiet} / 100`,
+            `Ride Comfort: ${ride} / 100`,
+            `Powertrain Smoothness: ${pt} / 100`,
             `サンプル数: ${points.length}（1秒ごと）`
         ].join('\n');
     }

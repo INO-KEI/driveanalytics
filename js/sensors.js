@@ -8,6 +8,10 @@ class SensorManager {
             latitude: null,
             longitude: null,
             speed: 0,
+            rawSpeed: 0,
+            filteredSpeed: 0,
+            gpsValid: false,
+            gpsConfidence: 0,
             accelMps2: 0,
             heading: null,
             accuracy: null
@@ -41,6 +45,11 @@ class SensorManager {
             zStd: 0
         };
         this.A = A;
+        this.V = window.DriveVehicle;
+        this.vehicle = this.V ? new this.V.VehicleAnalyzer() : null;
+        this.orientation = null;
+        this.vehicleSummary = null;
+        this.boundOrientationHandler = this.handleOrientationEvent.bind(this);
         this.noiseData = {
             dbfs: -100,
             dbfsRaw: -100,
@@ -139,7 +148,7 @@ class SensorManager {
 
     handleLocationUpdate(position) {
         const coords = position.coords;
-        const speedKmh = coords.speed != null && coords.speed >= 0
+        const rawFromGps = coords.speed != null && coords.speed >= 0
             ? coords.speed * 3.6
             : this.estimateSpeedKmh(coords.latitude, coords.longitude, position.timestamp);
 
@@ -153,12 +162,38 @@ class SensorManager {
             );
         }
 
+        let gpsQuality = {
+            gpsValid: true,
+            gpsConfidence: 1,
+            rawSpeed: rawFromGps || 0,
+            filteredSpeed: rawFromGps || 0,
+            longAccel: this.longAccel,
+            drivingState: 'UNKNOWN',
+            reason: 'ok'
+        };
+        if (this.vehicle) {
+            gpsQuality = this.vehicle.ingestGps({
+                timestamp: position.timestamp,
+                rawSpeed: rawFromGps || 0,
+                accuracy: coords.accuracy,
+                heading: heading,
+                latitude: coords.latitude,
+                longitude: coords.longitude
+            });
+        }
+
+        const speedKmh = gpsQuality.filteredSpeed || 0;
         this.locationData.latitude = coords.latitude;
         this.locationData.longitude = coords.longitude;
-        this.locationData.speed = speedKmh || 0;
+        this.locationData.rawSpeed = gpsQuality.rawSpeed || 0;
+        this.locationData.filteredSpeed = speedKmh;
+        this.locationData.speed = speedKmh;
+        this.locationData.gpsValid = gpsQuality.gpsValid;
+        this.locationData.gpsConfidence = gpsQuality.gpsConfidence;
         this.locationData.heading = heading;
         this.locationData.accuracy = coords.accuracy;
         this.locationData.timestamp = position.timestamp;
+        this.locationData.drivingState = gpsQuality.drivingState;
 
         if (this.isRecording && this.session.lastFix) {
             const dt = (position.timestamp - this.session.lastFix.timestamp) / 1000;
@@ -168,38 +203,41 @@ class SensorManager {
                 coords.latitude,
                 coords.longitude
             );
-            if (dt > 0 && dist < 80) {
+            const distKmh = dt > 0 ? (dist / dt) * 3.6 : 0;
+            if (dt > 0 && dist < 80 && distKmh <= 180 && gpsQuality.gpsValid) {
                 this.session.distanceM += dist;
             }
 
             const headingDelta = (this.session.lastFix.heading != null && heading != null)
                 ? this.A.wrapHeadingDelta(this.session.lastFix.heading, heading)
                 : 0;
-            const speedMps = (speedKmh || 0) / 3.6;
+            const speedMps = speedKmh / 3.6;
             this.accelerationData.lateralG = this.A.corneringAccel(speedMps, headingDelta, dt) / this.A.G;
 
-            const rawAccel = this.A.longitudinalAccel(
-                this.session.lastFix.speedKmh || 0,
-                speedKmh || 0,
-                dt
-            );
+            const prevSpeed = this.session.lastFix.speedKmh || 0;
+            const rawAccel = gpsQuality.gpsValid
+                ? this.A.longitudinalAccel(prevSpeed, speedKmh, dt)
+                : null;
             if (rawAccel != null) {
                 this.longAccel = this.longAccel * 0.62 + rawAccel * 0.38;
             } else if (dt >= 2.5) {
                 this.longAccel *= 0.5;
             }
         }
+        if (this.vehicle && gpsQuality.longAccel != null) {
+            this.longAccel = gpsQuality.longAccel;
+        }
         this.locationData.accelMps2 = this.longAccel;
         this.speedTrace.push({
             t: position.timestamp,
-            speed: speedKmh || 0,
+            speed: speedKmh,
             accel: this.longAccel
         });
         while (this.speedTrace.length > 12) {
             this.speedTrace.shift();
         }
         this.driveEvent = this.A.classifyDriveEvent(
-            speedKmh || 0,
+            speedKmh,
             this.longAccel,
             this.speedTrace,
             this.driveEvent
@@ -216,7 +254,7 @@ class SensorManager {
             longitude: coords.longitude,
             heading: heading,
             timestamp: position.timestamp,
-            speedKmh: speedKmh || 0
+            speedKmh: speedKmh
         };
 
         this.notifyListeners('location', this.getLocationSnapshot());
@@ -271,6 +309,7 @@ class SensorManager {
                 return;
             }
             window.addEventListener('devicemotion', this.boundMotionHandler);
+            this.startOrientationTracking();
         } catch (error) {
             this.notifyListeners('error', { message: '加速度センサーを開始できません。' });
             console.error(error);
@@ -397,6 +436,18 @@ class SensorManager {
             unavailable: false
         };
 
+        if (this.vehicle) {
+            this.vehicle.ingestMotion({
+                t: now,
+                linX: linX,
+                linY: linY,
+                linZ: linZ,
+                vertical: vertical,
+                horizontal: horizontal,
+                shake: shakeRms
+            });
+        }
+
         if (now - this.lastUiNotify.acceleration > 200) {
             this.lastUiNotify.acceleration = now;
             this.notifyListeners('acceleration', Object.assign({}, this.accelerationData));
@@ -427,6 +478,39 @@ class SensorManager {
 
     stopAccelerationTracking() {
         window.removeEventListener('devicemotion', this.boundMotionHandler);
+    }
+
+    async startOrientationTracking() {
+        if (!window.DeviceOrientationEvent) {
+            return;
+        }
+        try {
+            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                const permissionState = await DeviceOrientationEvent.requestPermission();
+                if (!this.isRecording || permissionState !== 'granted') {
+                    return;
+                }
+            }
+            window.addEventListener('deviceorientation', this.boundOrientationHandler);
+        } catch (error) {
+            console.error(error);
+        }
+    }
+
+    handleOrientationEvent(event) {
+        this.orientation = {
+            alpha: event.alpha,
+            beta: event.beta,
+            gamma: event.gamma
+        };
+        if (this.vehicle) {
+            this.vehicle.setOrientation(this.orientation);
+        }
+    }
+
+    stopOrientationTracking() {
+        window.removeEventListener('deviceorientation', this.boundOrientationHandler);
+        this.orientation = null;
     }
 
     async startNoiseTracking() {
@@ -518,6 +602,20 @@ class SensorManager {
             voiceDetected: voiceDetected
         }));
 
+        if (this.vehicle) {
+            const bandDb = this.V.audioLayerBands(
+                this.freqBuffer,
+                this.audioContext.sampleRate,
+                this.analyzer.fftSize
+            );
+            this.vehicle.ingestAudio({
+                t: now,
+                dbfs: source.dbfs,
+                voice: voiceDetected,
+                bandDb: bandDb
+            });
+        }
+
         if (now - this.lastUiNotify.noise > 200) {
             this.lastUiNotify.noise = now;
             this.notifyListeners('noise', Object.assign({}, this.noiseData));
@@ -572,7 +670,9 @@ class SensorManager {
             return;
         }
 
-        const speed = loc.speed || 0;
+        const speed = this.locationData.filteredSpeed != null
+            ? this.locationData.filteredSpeed
+            : (loc.speed || 0);
         const prevPoint = this.session.points[this.session.points.length - 1];
         let sampleEvent = this.A.pickDriveEvent(
             this.driveEvent,
@@ -593,6 +693,10 @@ class SensorManager {
             latitude: loc.latitude,
             longitude: loc.longitude,
             speed: speed,
+            rawSpeed: loc.rawSpeed || speed,
+            filteredSpeed: speed,
+            gpsValid: Boolean(loc.gpsValid),
+            gpsConfidence: loc.gpsConfidence || 0,
             lateralG: this.accelerationData.lateralG || 0,
             shake: this.accelerationData.shake || 0,
             rms: this.accelerationData.rms || 0,
@@ -635,6 +739,9 @@ class SensorManager {
             point[band.key + 'Db'] = this.noiseData[band.key + 'Db'];
             point[band.key + 'Share'] = this.noiseData[band.key + 'Share'];
         });
+        if (this.vehicle) {
+            Object.assign(point, this.vehicle.buildSample());
+        }
 
         this.session.points.push(point);
         this.notifyListeners('sample', point);
@@ -669,7 +776,13 @@ class SensorManager {
             elapsedMs: this.session.startedAt ? Date.now() - this.session.startedAt : 0,
             quietness: this.getQuietness(),
             driveEvent: this.driveEvent,
-            driveMode: this.driveMode
+            driveMode: this.driveMode,
+            drivingState: this.locationData.drivingState,
+            gpsValid: this.locationData.gpsValid,
+            gpsConfidence: this.locationData.gpsConfidence,
+            rawSpeed: this.locationData.rawSpeed,
+            filteredSpeed: this.locationData.filteredSpeed,
+            vehicle: this.vehicle ? this.vehicle.getSnapshot() : null
         });
     }
 
@@ -683,7 +796,22 @@ class SensorManager {
             quietness: this.getQuietness(),
             elapsedMs: this.session.startedAt ? Date.now() - this.session.startedAt : 0,
             driveMode: this.driveMode,
-            driveEvent: this.driveEvent
+            driveEvent: this.driveEvent,
+            drivingState: this.locationData.drivingState,
+            quietnessScore: this.vehicleSummary && this.vehicleSummary.quietnessScore != null
+                ? this.vehicleSummary.quietnessScore
+                : (this.vehicle && this.vehicle.getSnapshot().quietnessScore),
+            rideComfortScore: this.vehicleSummary && this.vehicleSummary.rideComfortScore != null
+                ? this.vehicleSummary.rideComfortScore
+                : (this.vehicle && this.vehicle.getSnapshot().rideComfortScore),
+            powertrainSmoothnessScore: this.vehicleSummary && this.vehicleSummary.powertrainSmoothnessScore != null
+                ? this.vehicleSummary.powertrainSmoothnessScore
+                : (this.vehicle && this.vehicle.getSnapshot().powertrainSmoothnessScore),
+            character: this.vehicleSummary && this.vehicleSummary.character,
+            comments: this.vehicleSummary && this.vehicleSummary.comments,
+            speedBands: this.vehicleSummary && this.vehicleSummary.speedBands,
+            eventStats: this.vehicleSummary && this.vehicleSummary.eventStats,
+            vehicle: this.vehicle ? this.vehicle.getSnapshot() : null
         };
     }
 
@@ -713,6 +841,15 @@ class SensorManager {
         this.speechMidHistory = [];
         this.voiceHoldUntil = 0;
         this.lastCleanRaw = null;
+        this.vehicleSummary = null;
+        this.locationData.rawSpeed = 0;
+        this.locationData.filteredSpeed = 0;
+        this.locationData.gpsValid = false;
+        this.locationData.gpsConfidence = 0;
+        this.locationData.drivingState = 'UNKNOWN';
+        if (this.vehicle) {
+            this.vehicle.reset();
+        }
     }
 
     isDemoMode() {
@@ -731,17 +868,20 @@ class SensorManager {
             if (!this.isRecording) {
                 return;
             }
+            try {
             const t = step / 18;
             const cycle = step % 100;
             let speedMps;
             if (cycle < 15) {
                 speedMps = 0;
-            } else if (cycle < 32) {
-                speedMps = ((cycle - 15) / 17) * 12;
+            } else if (cycle < 28) {
+                speedMps = ((cycle - 15) / 13) * 5;
+            } else if (cycle < 42) {
+                speedMps = 4.6 + Math.sin(t * 1.4) * 0.35;
             } else if (cycle < 78) {
-                speedMps = 12.5 + Math.sin(t * 0.8) * 0.8;
+                speedMps = 13.5 + Math.sin(t * 0.8) * 0.7;
             } else {
-                speedMps = Math.max(0, 12.5 - ((cycle - 78) / 22) * 12.5);
+                speedMps = Math.max(0, 13.5 - ((cycle - 78) / 22) * 13.5);
             }
             const heading = (25 + t * 28 + Math.sin(t * 2.4) * 35 + 360) % 360;
             const headingRad = heading * Math.PI / 180;
@@ -751,25 +891,30 @@ class SensorManager {
             lat += (speedMps * dt * Math.cos(headingRad)) / metersPerDegLat;
             lng += (speedMps * dt * Math.sin(headingRad)) / metersPerDegLng;
 
+            const gpsSpike = cycle === 44;
             this.handleLocationUpdate({
                 timestamp: Date.now(),
                 coords: {
                     latitude: lat,
                     longitude: lng,
-                    speed: speedMps,
+                    speed: gpsSpike ? 2200 / 3.6 : speedMps,
                     heading: heading,
                     accuracy: 6
                 }
             });
 
+            const kmh = speedMps * 3.6;
             const corner = Math.sin(t * 2.4);
-            const bump = Math.abs(Math.sin(step / 3)) > 0.88 ? 1.9 : 0.18;
+            const lowSpeed = kmh >= 8 && kmh <= 22;
+            const launchRise = cycle >= 15 && cycle < 36;
+            const bump = Math.abs(Math.sin(step / 3)) > 0.88 ? 1.9 : (lowSpeed ? 0.42 : 0.16);
+            const shakeX = (lowSpeed ? 0.62 : 0.12) + Math.abs(corner) * 0.25;
             for (let k = 0; k < 4; k++) {
                 const phase = (step * 4 + k) / 2;
                 this.handleMotionEvent({
                     acceleration: {
-                        x: corner * 0.4,
-                        y: 0.05,
+                        x: shakeX * Math.sin(phase * 0.7),
+                        y: (launchRise ? 0.22 : 0.04) + (cycle < 15 ? 0.01 : 0),
                         z: bump * Math.sin(phase)
                     },
                     accelerationIncludingGravity: {
@@ -780,13 +925,34 @@ class SensorManager {
                 });
             }
 
-            const raw = -38 + Math.abs(corner) * 16 + (bump > 1 ? 8 : 0);
-            const engineP = 0.22 + Math.abs(Math.sin(t)) * 0.18;
-            const roadP = 0.38 + Math.abs(corner) * 0.28 + (bump > 1 ? 0.2 : 0);
-            const windP = 0.12 + Math.max(0, speedMps - 8) * 0.03 + Math.abs(Math.sin(t * 1.7)) * 0.08;
+            const raw = -40 + Math.abs(corner) * 10 + (bump > 1 ? 8 : 0) + (lowSpeed ? 6 : 0);
+            const engineP = (cycle < 15 ? 0.55 : 0.18) + (launchRise ? 0.28 : 0);
+            const roadP = 0.30 + Math.abs(corner) * 0.22 + (bump > 1 ? 0.2 : 0) + Math.max(0, speedMps - 8) * 0.02;
+            const windP = 0.08 + Math.max(0, speedMps - 10) * 0.04 + Math.abs(Math.sin(t * 1.7)) * 0.05;
             const bands = this.A.splitOverallDbfs(raw, engineP, roadP, windP);
             this.noiseData = this.packNoise(raw, bands);
+            if (this.vehicle) {
+                const lf = cycle < 15 ? -26 : (launchRise ? -34 + (cycle - 15) * 0.55 : -38);
+                const power = cycle < 15 ? -28 : (launchRise ? -36 + (cycle - 15) * 0.4 : -40);
+                this.vehicle.ingestAudio({
+                    t: performance.now(),
+                    dbfs: raw,
+                    voice: false,
+                    bandDb: {
+                        lf: lf,
+                        power: power,
+                        mid: -42 + Math.abs(corner) * 4,
+                        upper: -46 + Math.max(0, speedMps - 6) * 0.6,
+                        high: -50 + Math.max(0, speedMps - 10) * 0.9,
+                        broadband: -40 + Math.max(0, speedMps) * 0.5 + Math.abs(corner) * 3,
+                        aero: -52 + Math.max(0, speedMps - 10) * 1.1
+                    }
+                });
+            }
             this.notifyListeners('noise', Object.assign({}, this.noiseData));
+            } catch (error) {
+                console.error(error);
+            }
             step += 1;
         }, 200);
     }
@@ -847,7 +1013,11 @@ class SensorManager {
         this.stopDemoLoop();
         this.stopLocationTracking();
         this.stopAccelerationTracking();
+        this.stopOrientationTracking();
         this.stopNoiseTracking();
+        if (this.vehicle) {
+            this.vehicleSummary = this.vehicle.finalize(this.session.points);
+        }
         this.notifyListeners('session', Object.assign(this.getSessionSummary(), { state: 'stopped' }));
     }
 

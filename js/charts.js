@@ -51,8 +51,14 @@ class NervCharts {
             engineShare: 0,
             roadShare: 0,
             windShare: 0,
+            engineNoiseScore: 0,
+            roadNoiseScore: 0,
+            windNoiseScore: 0,
             dominant: 'none',
-            driveEvent: 'none'
+            engineState: 'UNKNOWN',
+            driveEvent: 'none',
+            drivingState: 'UNKNOWN',
+            impactEvent: false
         };
     }
 
@@ -92,8 +98,11 @@ class NervCharts {
             this.hud.accel.textContent = `${sign}${accel.toFixed(1)}`;
         }
         if (this.hud.event) {
+            const vehicleLabels = window.DriveVehicle && window.DriveVehicle.DRIVING_STATE_LABEL;
             const labels = (window.DriveAnalysis && window.DriveAnalysis.DRIVE_EVENT_LABEL) || {};
-            this.hud.event.textContent = labels[s.driveEvent] || '--';
+            this.hud.event.textContent = (vehicleLabels && vehicleLabels[s.drivingState])
+                || labels[s.driveEvent]
+                || '--';
         }
         if (this.hud.motion) {
             this.hud.motion.textContent = `${(s.combinedRms || 0).toFixed(2)}`;
@@ -104,11 +113,18 @@ class NervCharts {
             this.hud.comfort.className = `hud-push comfort-chip ${s.comfortClass || ''}`;
         }
         if (this.hud.noise) {
-            this.hud.noise.textContent = `${(s.dbfs || 0).toFixed(0)} dB`;
+            this.hud.noise.textContent = s.calibrated
+                ? `${(s.dbfs || 0).toFixed(0)} dB`
+                : `${(s.dbfs || 0).toFixed(0)} rel`;
         }
         if (this.hud.noiseSrc) {
-            const short = { engine: 'エン', road: 'ロード', wind: '風', none: '--' };
-            this.hud.noiseSrc.textContent = short[s.dominant] || '--';
+            const state = s.engineState || 'UNKNOWN';
+            const short = {
+                ENGINE_ON: 'ON',
+                ENGINE_OFF: 'OFF',
+                UNKNOWN: '--'
+            };
+            this.hud.noiseSrc.textContent = short[state] || '--';
         }
     }
 
@@ -307,14 +323,19 @@ class NervCharts {
     markDriveEvents(ctx, pts, now, w, h, maxV) {
         const colors = {
             stop: '#8a8a8a',
+            STOPPED: '#8a8a8a',
             launch: '#39ff50',
+            LAUNCH: '#39ff50',
             cruise: '#4db8ff',
+            CRUISE: '#4db8ff',
             accel: '#ffd24d',
-            brake: '#ff3b30'
+            ACCELERATION: '#ffd24d',
+            brake: '#ff3b30',
+            DECELERATION: '#ff3b30'
         };
         let last = null;
         pts.forEach((p) => {
-            const event = p.driveEvent;
+            const event = p.drivingState || p.driveEvent;
             if (!event || event === 'none' || event === last) {
                 return;
             }
@@ -367,7 +388,6 @@ class NervCharts {
         const pts = this.history;
         const scale = this.vibScale();
         const yMax = scale.yMax;
-        const hzMax = scale.hzMax;
         const colors = (window.DriveAnalysis && window.DriveAnalysis.VIB_KIND_COLOR) || {
             drone: '#ffd200',
             rough: '#ff7a18',
@@ -411,20 +431,12 @@ class NervCharts {
         );
         this.strokeLine(
             ctx, pts, now, w, h,
-            (p) => clampY(p.peak || 0), 0, yMax,
+            (p) => clampY(p.shake || 0), 0, yMax,
             'rgba(255, 243, 214, 0.9)', 1.4
         );
 
-        ctx.setLineDash([5, 4]);
-        this.strokeLine(
-            ctx, pts, now, w, h,
-            (p) => Math.min(hzMax, p.freq || 0), 0, hzMax,
-            'rgba(199, 125, 255, 0.85)', 1.5
-        );
-        ctx.setLineDash([]);
-
         pts.forEach((p) => {
-            if (p.vibKind !== 'impact') {
+            if (p.vibKind !== 'impact' && !p.impactEvent) {
                 return;
             }
             const x = this.axisX(p.t, now, w);
@@ -442,7 +454,6 @@ class NervCharts {
         this.label(ctx, '0', 6, h - 6, 'rgba(255,210,0,0.45)');
         this.label(ctx, '路面', w - 36, this.yOf(scale.droneHigh, 0, yMax, h) - 4, 'rgba(255,210,0,0.55)');
         this.label(ctx, '衝撃', w - 36, this.yOf(scale.impactHigh, 0, yMax, h) - 4, 'rgba(255,59,48,0.7)');
-        this.label(ctx, `${hzMax}Hz`, w - 44, h - 6, 'rgba(199,125,255,0.7)');
     }
 
     drawNoise() {
@@ -472,9 +483,9 @@ class NervCharts {
             const v = typeof p[key] === 'number' ? p[key] : yMin;
             return Math.max(yMin, Math.min(yMax, v));
         };
-        this.strokeLine(ctx, pts, now, w, h, dbOf('engineDb'), yMin, yMax, '#d47bff', 1.8);
-        this.strokeLine(ctx, pts, now, w, h, dbOf('roadDb'), yMin, yMax, '#ff7a18', 1.8);
-        this.strokeLine(ctx, pts, now, w, h, dbOf('windDb'), yMin, yMax, '#ffe14d', 1.8);
+        this.strokeLine(ctx, pts, now, w, h, (p) => p.engineNoiseScore || 0, 0, 100, '#d47bff', 1.5);
+        this.strokeLine(ctx, pts, now, w, h, (p) => p.roadNoiseScore || 0, 0, 100, '#ff7a18', 1.5);
+        this.strokeLine(ctx, pts, now, w, h, (p) => p.windNoiseScore || 0, 0, 100, '#ffe14d', 1.5);
         this.strokeLine(ctx, pts, now, w, h, dbOf('dbfs'), yMin, yMax, '#00e5ff', 2.5);
 
         pts.forEach((p) => {

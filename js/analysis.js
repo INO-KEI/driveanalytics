@@ -595,6 +595,7 @@
         FINE_BANDS.forEach(function (band) {
             fineKeys.push(band.key + '_db', band.key + '_share');
         });
+        const V = global.DriveVehicle;
         const lines = [
             '# DriveAnalytics',
             `# started_at,${summary.startedAt ? new Date(summary.startedAt).toISOString() : ''}`,
@@ -604,50 +605,58 @@
             `# quietness,${summary.quietness == null ? '' : summary.quietness}`,
             `# drive_mode,${summary.driveMode || ''}`,
             '# noise_bands,boom 20-80Hz,power 80-250Hz,struct 250-500Hz,tire 500-1600Hz,cabin 1600-3500Hz,aero 3500-8000Hz',
-            `# points,${points.length}`,
-            [
-                'index',
-                'time_local',
-                'time_iso',
-                'elapsed_s',
-                'latitude',
-                'longitude',
-                'speed_kmh',
-                'avg_speed_kmh',
-                'distance_m',
-                'drive_mode',
-                'drive_event',
-                'rms_ms2',
-                'shake_ms2',
-                'combined_rms_ms2',
-                'x_rms',
-                'y_rms',
-                'z_rms',
-                'x_peak',
-                'y_peak',
-                'z_peak',
-                'x_std',
-                'y_std',
-                'z_std',
-                'vert_peak',
-                'lateral_g',
-                'freq_hz',
-                'comfort',
-                'spl_db',
-                'quietness',
-                'engine_db',
-                'road_db',
-                'wind_db',
-                'engine_share',
-                'road_share',
-                'wind_share',
-                'dominant_noise',
-                'dominant_fine'
-            ].concat(fineKeys).concat([
-                'voice',
-                'calibrated'
-            ]).join(',')
+            '# analysis_note,legacy shares kept for comparison; new model uses independent scores and driving/powertrain layers',
+            `# points,${points.length}`
         ];
+        if (V && V.summaryComments) {
+            lines.push.apply(lines, V.summaryComments(summary, summary.character));
+        }
+        const vehicleKeys = (V && V.CSV_COLUMNS) || [];
+        lines.push([
+            'index',
+            'time_local',
+            'time_iso',
+            'elapsed_s',
+            'latitude',
+            'longitude',
+            'speed_kmh',
+            'avg_speed_kmh',
+            'distance_m',
+            'drive_mode',
+            'drive_event',
+            'rms_ms2',
+            'shake_ms2',
+            'combined_rms_ms2',
+            'x_rms',
+            'y_rms',
+            'z_rms',
+            'x_peak',
+            'y_peak',
+            'z_peak',
+            'x_std',
+            'y_std',
+            'z_std',
+            'vert_peak',
+            'lateral_g',
+            'freq_hz',
+            'comfort',
+            'spl_db',
+            'quietness',
+            'engine_db',
+            'road_db',
+            'wind_db',
+            'engine_share',
+            'road_share',
+            'wind_share',
+            'legacy_engine_share',
+            'legacy_road_share',
+            'legacy_wind_share',
+            'dominant_noise',
+            'dominant_fine'
+        ].concat(fineKeys).concat([
+            'voice',
+            'calibrated'
+        ]).concat(vehicleKeys).join(','));
         points.forEach((point) => {
             const when = new Date(point.time);
             const fineVals = [];
@@ -661,7 +670,7 @@
                 numCell((point.elapsedMs || 0) / 1000, 0),
                 numCell(point.latitude, 6),
                 numCell(point.longitude, 6),
-                numCell(point.speed, 2),
+                numCell(point.filteredSpeed != null ? point.filteredSpeed : point.speed, 2),
                 numCell(point.avgSpeed, 2),
                 numCell(point.distanceM, 1),
                 csvCell(point.driveMode || ''),
@@ -690,12 +699,15 @@
                 numCell(point.engineShare, 3),
                 numCell(point.roadShare, 3),
                 numCell(point.windShare, 3),
+                numCell(point.engineShare, 3),
+                numCell(point.roadShare, 3),
+                numCell(point.windShare, 3),
                 csvCell(point.dominant || ''),
                 csvCell(point.dominantFine || '')
             ].concat(fineVals).concat([
                 point.voice ? 1 : 0,
                 point.calibrated ? 1 : 0
-            ]).join(','));
+            ]).concat(V && V.serializePoint ? V.serializePoint(point) : []).join(','));
         });
         return lines.join('\r\n');
     }
@@ -715,6 +727,9 @@
         NOISE_DOMINANT_LABEL,
         DRIVE_MODES,
         DRIVE_EVENT_LABEL,
+        bandBinRange,
+        bandIntegratedPower,
+        bandPower,
         audioBands,
         splitOverallDbfs,
         bandsFromFinePowers,
@@ -738,6 +753,7 @@
         formatDuration,
         formatStamp,
         csvCell,
+        numCell,
         buildTrackCsv
     };
 })(window);
