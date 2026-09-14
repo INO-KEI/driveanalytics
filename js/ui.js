@@ -161,9 +161,10 @@ class UIManager {
     }
 
     initMap() {
-        this.map = L.map('map').setView([35.6895, 139.6917], 13);
+        this.map = L.map('map', { maxZoom: 19 }).setView([35.6895, 139.6917], 19);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; OpenStreetMap'
+            attribution: '&copy; OpenStreetMap',
+            maxZoom: 19
         }).addTo(this.map);
         this.spotLayer = L.layerGroup().addTo(this.map);
         this.polyline = L.polyline([], {
@@ -467,6 +468,7 @@ class UIManager {
                 keyboard: false,
                 zIndexOffset: 1200
             }).addTo(this.map);
+            this.map.setView(latlng, 19);
         }
         if (this.followMap) {
             this.map.panTo(latlng, { animate: true, duration: 0.4 });
@@ -774,9 +776,34 @@ class UIManager {
             engineState: vehicle.engineState,
             drivingState: vehicle.drivingState,
             powertrainTransition: vehicle.powertrainTransition,
+            startCandidate: vehicle.startCandidate,
+            stopCandidate: vehicle.stopCandidate,
+            engineTransitionConfirmed: vehicle.engineTransitionConfirmed,
             gpsValid: vehicle.gpsValid,
             filteredSpeed: vehicle.filteredSpeed,
-            factors: vehicle.engineFactors
+            factors: vehicle.engineFactors,
+            ride: {
+                lowFrequencyShakeScore: vehicle.lowFrequencyShakeScore,
+                continuousVibrationScore: vehicle.continuousVibrationScore,
+                impactScore: vehicle.impactScore,
+                impactBaseline: vehicle.impactBaseline,
+                impactPeakRatio: vehicle.impactPeakRatio,
+                final: vehicle.rideComfortScore
+            },
+            powertrain: {
+                steady: vehicle.steadyPowertrainScore,
+                transitionSmoothness: vehicle.transitionSmoothnessScore,
+                vibrationDelta: vehicle.transitionVibrationDelta,
+                noiseDelta: vehicle.transitionNoiseDelta,
+                final: vehicle.powertrainSmoothnessScore
+            },
+            quietness: {
+                totalNoise: vehicle.totalNoise,
+                lowFrequencyNoise: vehicle.lowFrequencyNoise,
+                midFrequencyNoise: vehicle.midFrequencyNoise,
+                highFrequencyNoise: vehicle.highFrequencyNoise,
+                final: vehicle.quietnessScore
+            }
         }, null, 2);
     }
 

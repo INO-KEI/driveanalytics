@@ -468,7 +468,7 @@
 
     // 振幅グラフの固定縮尺 [m/s²]。ISO 2631-1 の「極めて不快」(1.6) が上部に来る
     const VIB_CHART = {
-        yMax: 2.0,
+        yMax: 3.0,
         hzMax: 25,
         droneHigh: 0.32,
         impactHigh: 0.8

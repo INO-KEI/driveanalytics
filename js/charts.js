@@ -368,7 +368,7 @@ class NervCharts {
 
     vibScale() {
         return (window.DriveAnalysis && window.DriveAnalysis.VIB_CHART) || {
-            yMax: 2,
+            yMax: 3,
             hzMax: 25,
             droneHigh: 0.32,
             impactHigh: 0.8

@@ -1,5 +1,5 @@
 // sw.js
-const CACHE_NAME = 'drive-analytics-v26';
+const CACHE_NAME = 'drive-analytics-v27';
 const urlsToCache = [
     './',
     './index.html',

@@ -23,10 +23,20 @@
         cruiseSpeedStdKmh: 3.5,
         engineOnThreshold: 0.70,
         engineOffThreshold: 0.30,
-        engineHoldMs: 2200,
+        engineHoldMs: 2800,
         engineNoiseGate: 0.45,
         impactPeakMps2: 0.90,
         impactCrest: 3.0,
+        impactRatio: 2.3,
+        impactDeltaMps2: 0.55,
+        impactMaxDurationMs: 450,
+        impactMinPeakMps2: 0.45,
+        impactBaselineMs: 4000,
+        rideWeightShake: 0.35,
+        rideWeightContinuous: 0.40,
+        rideWeightImpact: 0.25,
+        powertrainWeightTransition: 0.55,
+        powertrainWeightSteady: 0.45,
         audioDeltaWindowSec: 4,
         persistNeedSec: 2.2,
         historySec: 12,
@@ -94,6 +104,15 @@
         { id: '60+', min: 60, max: 1000 }
     ];
 
+    const RIDE_SPEED_BANDS = [
+        { min: 0, max: 5, shake: 0.55, vib: 0.55 },
+        { min: 5, max: 15, shake: 0.95, vib: 1.00 },
+        { min: 15, max: 30, shake: 0.75, vib: 0.80 },
+        { min: 30, max: 50, shake: 0.90, vib: 0.95 },
+        { min: 50, max: 80, shake: 0.85, vib: 0.95 },
+        { min: 80, max: 1000, shake: 0.80, vib: 0.90 }
+    ];
+
     const AUDIO_BANDS = [
         { key: 'lf', low: 20, high: 80 },
         { key: 'power', low: 80, high: 250 },
@@ -135,6 +154,25 @@
         'ride_shake_score',
         'ride_impact_score',
         'ride_stability_score',
+        'low_frequency_shake_score',
+        'continuous_vibration_score',
+        'impact_baseline',
+        'impact_peak_ratio',
+        'final_ride_comfort_score',
+        'start_candidate',
+        'stop_candidate',
+        'engine_transition_confirmed',
+        'transition_vibration_delta',
+        'transition_noise_delta',
+        'steady_powertrain_score',
+        'transition_smoothness_score',
+        'final_powertrain_score',
+        'total_noise',
+        'low_frequency_noise',
+        'mid_frequency_noise',
+        'high_frequency_noise',
+        'impact_event_id',
+        'engine_transition_id',
         'engine_debug'
     ];
 
@@ -252,6 +290,26 @@
         return 'Moderate';
     }
 
+    function padEventId(prefix, n) {
+        const s = String(n);
+        return prefix + (s.length >= 3 ? s : ('000' + s).slice(-3));
+    }
+
+    function expectedRideLevels(speed) {
+        const spd = speed || 0;
+        for (let i = 0; i < RIDE_SPEED_BANDS.length; i++) {
+            if (spd >= RIDE_SPEED_BANDS[i].min && spd < RIDE_SPEED_BANDS[i].max) {
+                return RIDE_SPEED_BANDS[i];
+            }
+        }
+        return RIDE_SPEED_BANDS[RIDE_SPEED_BANDS.length - 1];
+    }
+
+    function comfortFromExpected(value, expected) {
+        const excess = Math.max(0, (value || 0) - expected);
+        return clamp(100 - (excess / Math.max(expected, 0.15)) * 55, 0, 100);
+    }
+
     function audioLayerBands(freqDb, sampleRate, fftSize) {
         const DA = A();
         const out = {};
@@ -322,6 +380,23 @@
             rideShakeScore: 0,
             rideImpactScore: 0,
             rideStabilityScore: 100,
+            lowFrequencyShakeScore: 100,
+            continuousVibrationScore: 100,
+            impactBaseline: 0,
+            impactPeakRatio: 0,
+            startCandidate: false,
+            stopCandidate: false,
+            engineTransitionConfirmed: false,
+            transitionVibrationDelta: 0,
+            transitionNoiseDelta: 0,
+            steadyPowertrainScore: 100,
+            transitionSmoothnessScore: 100,
+            totalNoise: 0,
+            lowFrequencyNoise: 0,
+            midFrequencyNoise: 0,
+            highFrequencyNoise: 0,
+            impactEventId: '',
+            engineTransitionId: '',
             engineFactors: {
                 lowFrequencyRise: 0,
                 powerBandRise: 0,
@@ -364,6 +439,19 @@
             this.metricWin = [];
             this.impactHoldUntil = 0;
             this.impactScore = 0;
+            this.impactBaseline = 0;
+            this.impactPeakRatio = 0;
+            this.impactSeq = 0;
+            this.impactActiveId = '';
+            this.engineTransSeq = 0;
+            this.engineTransActiveId = '';
+            this.engineTransUntil = 0;
+            this.vibLongWin = [];
+            this.featureHist = [];
+            this.confirmedTransitions = [];
+            this.pendingTransition = null;
+            this.lastConfirmedSmoothness = 100;
+            this.liveSteady = [];
             this.riseStreakMs = 0;
             this.dropStreakMs = 0;
             this.lastTick = 0;
@@ -561,6 +649,8 @@
                 horiz: horizontal
             });
             this.trim(this.motionWin, ts, 1400);
+            this.vibLongWin.push({ t: ts, mag: mag });
+            this.trim(this.vibLongWin, ts, cfg.impactBaselineMs + 800);
 
             const n = this.motionWin.length;
             let sumSq = 0;
@@ -583,34 +673,81 @@
             const longRms = n ? Math.sqrt(longSq / n) : 0;
             const latRms = n ? Math.sqrt(latSq / n) : 0;
             const shake = n ? Math.sqrt(horizSq / n) : (input.shake || 0);
-            const rms = cont > 1e-6 ? cont : 1e-6;
-            const crest = peak / rms;
-            const impactNow = peak >= cfg.impactPeakMps2 || (crest >= cfg.impactCrest && peak >= 0.5);
-            if (impactNow) {
-                this.impactHoldUntil = ts + 800;
-                this.impactScore = Math.max(this.impactScore, clamp(peak / 2.2 * 100, 0, 100));
-            } else if (ts > this.impactHoldUntil) {
-                this.impactScore *= 0.82;
-                if (this.impactScore < 2) {
-                    this.impactScore = 0;
+
+            const baselineSamples = [];
+            const shortSamples = [];
+            for (let i = this.vibLongWin.length - 1; i >= 0; i--) {
+                const sample = this.vibLongWin[i];
+                const age = ts - sample.t;
+                if (age <= 220) {
+                    shortSamples.push(sample.mag);
+                }
+                if (age >= 400 && age <= cfg.impactBaselineMs) {
+                    baselineSamples.push(sample.mag);
                 }
             }
+            function rmsOf(values) {
+                if (!values.length) {
+                    return 0;
+                }
+                let sum = 0;
+                for (let i = 0; i < values.length; i++) {
+                    sum += values[i] * values[i];
+                }
+                return Math.sqrt(sum / values.length);
+            }
+            const baseline = baselineSamples.length ? rmsOf(baselineSamples) : cont;
+            const shortRms = shortSamples.length ? rmsOf(shortSamples) : cont;
+            const shortPeak = shortSamples.length ? Math.max.apply(null, shortSamples) : 0;
+            const floor = Math.max(baseline, 0.12);
+            const ratio = shortRms / floor;
+            let elevatedMs = 0;
+            let stillElevated = true;
+            for (let i = this.vibLongWin.length - 1; i >= 0; i--) {
+                const sample = this.vibLongWin[i];
+                if (sample.mag > baseline * 1.8) {
+                    if (stillElevated) {
+                        elevatedMs = ts - sample.t;
+                    }
+                } else {
+                    stillElevated = false;
+                }
+            }
+            const spike = (shortRms - baseline) >= cfg.impactDeltaMps2
+                && ratio >= cfg.impactRatio
+                && shortPeak >= cfg.impactMinPeakMps2
+                && elevatedMs <= cfg.impactMaxDurationMs;
+            if (elevatedMs > 2000) {
+                this.impactHoldUntil = 0;
+            }
+            if (spike) {
+                this.impactHoldUntil = ts + 700;
+                this.impactScore = clamp((ratio - 1) / 2.2 * 100, 0, 100);
+                if (!this.impactActiveId) {
+                    this.impactSeq += 1;
+                    this.impactActiveId = padEventId('IMPACT_', this.impactSeq);
+                }
+            } else if (ts > this.impactHoldUntil) {
+                this.impactScore *= 0.55;
+                if (this.impactScore < 4) {
+                    this.impactScore = 0;
+                    this.impactActiveId = '';
+                }
+            }
+            this.impactBaseline = baseline;
+            this.impactPeakRatio = ratio;
 
             this.snapshot.continuousVibration = cont;
             this.snapshot.shakeScore = shake;
             this.snapshot.impactScore = this.impactScore;
-            this.snapshot.impactEvent = ts < this.impactHoldUntil;
+            this.snapshot.impactEvent = Boolean(spike || (ts < this.impactHoldUntil && this.impactScore >= 8));
+            this.snapshot.impactBaseline = baseline;
+            this.snapshot.impactPeakRatio = ratio;
+            this.snapshot.impactEventId = this.snapshot.impactEvent ? this.impactActiveId : '';
             this.snapshot.verticalMotion = vertRms;
             this.snapshot.longitudinalMotion = Math.max(longRms, Math.abs(this.longAccel));
             this.snapshot.lateralMotion = latRms;
-            this.snapshot.rideVibrationScore = clamp(cont / 0.85 * 100, 0, 100);
-            this.snapshot.rideShakeScore = clamp(shake / 0.75 * 100, 0, 100);
             this.snapshot.rideImpactScore = this.impactScore;
-            this.snapshot.rideStabilityScore = clamp(
-                100 - this.snapshot.rideShakeScore * 0.45 - this.snapshot.rideImpactScore * 0.35 - this.snapshot.rideVibrationScore * 0.2,
-                0,
-                100
-            );
             this.syncSnapshot();
         }
 
@@ -749,16 +886,27 @@
 
             this.applyEngineHysteresis(now, engineP);
 
+            const startCandidate = startP > 0.42 && persist > 0.28 && this.engineState !== ENGINE_STATE.ON;
+            const stopCandidate = stopP > 0.42 && persistDrop > 0.28 && this.engineState !== ENGINE_STATE.OFF;
             let transition = POWERTRAIN_TRANSITION.NONE;
+            let confirmed = false;
             if (this.engineState !== this.lastEngineState && this.lastEngineState !== ENGINE_STATE.UNKNOWN && this.engineState !== ENGINE_STATE.UNKNOWN) {
                 transition = POWERTRAIN_TRANSITION.STATE_CHANGE;
-                this.transitionEvents.push({ t: now, speed: this.filteredSpeed, state: this.drivingState });
-            } else if (startP > 0.42 && persist > 0.28 && this.engineState !== ENGINE_STATE.ON) {
+                confirmed = true;
+                this.engineTransSeq += 1;
+                const kind = this.engineState === ENGINE_STATE.ON ? 'ENG_START_' : 'ENG_STOP_';
+                this.engineTransActiveId = padEventId(kind, this.engineTransSeq);
+                this.engineTransUntil = now + 3500;
+                this.openTransitionWindow(now);
+            } else if (startCandidate) {
                 transition = POWERTRAIN_TRANSITION.START_CANDIDATE;
-            } else if (stopP > 0.42 && persistDrop > 0.28 && this.engineState !== ENGINE_STATE.OFF) {
+            } else if (stopCandidate) {
                 transition = POWERTRAIN_TRANSITION.STOP_CANDIDATE;
             }
             this.lastEngineState = this.engineState;
+            if (now > this.engineTransUntil) {
+                this.engineTransActiveId = '';
+            }
 
             let ev = 0;
             if (this.engineState === ENGINE_STATE.OFF) {
@@ -775,6 +923,10 @@
             this.snapshot.engineStartProbability = startP;
             this.snapshot.engineStopProbability = stopP;
             this.snapshot.powertrainTransition = transition;
+            this.snapshot.startCandidate = startCandidate;
+            this.snapshot.stopCandidate = stopCandidate;
+            this.snapshot.engineTransitionConfirmed = confirmed;
+            this.snapshot.engineTransitionId = this.engineTransActiveId || '';
             this.snapshot.evLikelihood = ev;
             this.snapshot.audioDelta = audioDelta;
             this.snapshot.vibrationDelta = vibrationDelta;
@@ -818,6 +970,58 @@
                 this.engineState = target;
                 this.engineHold = { target: null, since: 0 };
             }
+        }
+
+        openTransitionWindow(now) {
+            const pre = this.featureHist.filter(function (item) {
+                return now - item.t <= 3000;
+            });
+            this.pendingTransition = {
+                t: now,
+                id: this.engineTransActiveId,
+                from: this.lastEngineState,
+                to: this.engineState,
+                preVib: pre.length ? median(pre.map(function (item) { return item.vibration; })) : (this.snapshot.continuousVibration || 0),
+                preShake: pre.length ? median(pre.map(function (item) { return item.shake; })) : (this.snapshot.shakeScore || 0),
+                preDbfs: pre.length ? median(pre.map(function (item) { return item.dbfs; })) : -40,
+                prePower: pre.length ? median(pre.map(function (item) { return item.power; })) : -40,
+                post: []
+            };
+        }
+
+        settlePendingTransition(now) {
+            const pending = this.pendingTransition;
+            if (!pending || now < pending.t + 2800) {
+                return;
+            }
+            const post = pending.post;
+            const postVib = post.length ? median(post.map(function (item) { return item.vibration; })) : (this.snapshot.continuousVibration || 0);
+            const postShake = post.length ? median(post.map(function (item) { return item.shake; })) : (this.snapshot.shakeScore || 0);
+            const postDbfs = post.length ? median(post.map(function (item) { return item.dbfs; })) : -40;
+            const postPower = post.length ? median(post.map(function (item) { return item.power; })) : -40;
+            const vibDelta = Math.max(0, postVib - pending.preVib, postShake - pending.preShake);
+            const noiseDelta = Math.max(0, postDbfs - pending.preDbfs, postPower - pending.prePower);
+            const smoothness = clamp(
+                100 - clamp(vibDelta / 0.35 * 40, 0, 50) - clamp(noiseDelta / 8 * 30, 0, 40),
+                0,
+                100
+            );
+            const event = {
+                t: pending.t,
+                id: pending.id,
+                from: pending.from,
+                to: pending.to,
+                vibrationDelta: vibDelta,
+                noiseDelta: noiseDelta,
+                smoothness: smoothness
+            };
+            this.confirmedTransitions.push(event);
+            this.transitionEvents.push(event);
+            this.lastConfirmedSmoothness = smoothness;
+            this.snapshot.transitionVibrationDelta = vibDelta;
+            this.snapshot.transitionNoiseDelta = noiseDelta;
+            this.snapshot.transitionSmoothnessScore = smoothness;
+            this.pendingTransition = null;
         }
 
         updateNoiseScores(now) {
@@ -870,6 +1074,7 @@
 
         updateAxisScores(now) {
             const s = this.snapshot;
+            const cfg = this.config;
             const cur = this.currentAudio();
             const overall = cur ? dbToNoiseScore(cur.dbfs) : 40;
             const quiet = clamp(
@@ -878,21 +1083,50 @@
                 0,
                 100
             );
+            const expect = expectedRideLevels(this.filteredSpeed || 0);
+            const lfShakeMetric = hypot3(s.shakeScore || 0, Math.abs(this.longAccel) * 0.25, 0);
+            const lfScore = comfortFromExpected(lfShakeMetric, expect.shake);
+            const contScore = comfortFromExpected(s.continuousVibration || 0, expect.vib);
+            const impactComfort = s.impactEvent
+                ? clamp(100 - (s.impactScore || 0) * 0.55, 40, 100)
+                : 100;
             const ride = clamp(
-                100 - (s.rideVibrationScore || 0) * 0.34 - (s.rideShakeScore || 0) * 0.28
-                - (s.rideImpactScore || 0) * 0.22 - clamp((s.verticalMotion || 0) / 0.7, 0, 1) * 16,
+                lfScore * cfg.rideWeightShake
+                + contScore * cfg.rideWeightContinuous
+                + impactComfort * cfg.rideWeightImpact,
                 0,
                 100
             );
-            const lowSpeed = s.drivingState === DRIVING_STATE.LAUNCH
-                || ((this.filteredSpeed || 0) >= 8 && (this.filteredSpeed || 0) <= 22);
-            const transPen = s.powertrainTransition === POWERTRAIN_TRANSITION.NONE ? 0 : 18;
-            const pt = clamp(
-                100 - Math.abs(s.audioDelta || 0) * 3.2 - Math.abs(s.vibrationDelta || 0) * 90
-                - (lowSpeed ? (s.rideShakeScore || 0) * 0.22 : 0) - transPen,
+
+            const steady = clamp(
+                100
+                - clamp(Math.abs(s.vibrationDelta || 0) / 0.28 * 28, 0, 35)
+                - clamp(Math.abs(s.audioDelta || 0) / 10 * 12, 0, 20),
                 0,
                 100
             );
+            this.liveSteady.push(steady);
+            if (this.liveSteady.length > 20) {
+                this.liveSteady.shift();
+            }
+            const steadyMean = mean(this.liveSteady);
+            if (this.pendingTransition) {
+                this.pendingTransition.post.push({
+                    t: now,
+                    vibration: s.continuousVibration || 0,
+                    shake: s.shakeScore || 0,
+                    dbfs: cur ? cur.dbfs : -40,
+                    power: cur ? cur.power : -40
+                });
+            }
+            this.settlePendingTransition(now);
+            const transSmooth = this.confirmedTransitions.length
+                ? mean(this.confirmedTransitions.map(function (ev) { return ev.smoothness; }))
+                : this.lastConfirmedSmoothness;
+            const pt = this.confirmedTransitions.length
+                ? clamp(transSmooth * cfg.powertrainWeightTransition + steadyMean * cfg.powertrainWeightSteady, 0, 100)
+                : steadyMean;
+
             this.liveQuiet.push(quiet);
             this.liveRide.push(ride);
             this.livePt.push(pt);
@@ -904,13 +1138,27 @@
             s.quietnessScore = Math.round(mean(this.liveQuiet));
             s.rideComfortScore = Math.round(mean(this.liveRide));
             s.powertrainSmoothnessScore = Math.round(mean(this.livePt));
+            s.lowFrequencyShakeScore = lfScore;
+            s.continuousVibrationScore = contScore;
+            s.rideVibrationScore = 100 - contScore;
+            s.rideShakeScore = 100 - lfScore;
+            s.rideImpactScore = s.impactScore;
+            s.rideStabilityScore = clamp((lfScore * 0.4 + contScore * 0.4 + impactComfort * 0.2), 0, 100);
+            s.steadyPowertrainScore = steadyMean;
+            s.transitionSmoothnessScore = transSmooth;
+            s.totalNoise = overall;
+            s.lowFrequencyNoise = cur ? dbToNoiseScore(cur.lf) : 0;
+            s.midFrequencyNoise = cur ? dbToNoiseScore(cur.broadband) : 0;
+            s.highFrequencyNoise = cur ? dbToNoiseScore(cur.aero) : 0;
 
-            this.metricWin.push({
+            this.featureHist.push({
                 t: now,
                 speed: this.filteredSpeed || 0,
                 vibration: s.continuousVibration || 0,
                 shake: s.shakeScore || 0,
                 vertical: s.verticalMotion || 0,
+                dbfs: cur ? cur.dbfs : -100,
+                power: cur ? cur.power : -100,
                 broadband: cur ? cur.broadband : -100,
                 aero: cur ? cur.aero : -100,
                 drivingState: this.drivingState,
@@ -921,6 +1169,8 @@
                 vibrationDelta: s.vibrationDelta || 0,
                 transition: s.powertrainTransition
             });
+            this.trim(this.featureHist, now, 8000);
+            this.metricWin.push(this.featureHist[this.featureHist.length - 1]);
             this.trim(this.metricWin, now, this.config.historySec * 1000);
         }
 
@@ -981,7 +1231,24 @@
                 engineDebug: JSON.stringify({
                     engineProbability: round4(s.engineProbability),
                     factors: s.engineFactors
-                })
+                }),
+                lowFrequencyShakeScore: s.lowFrequencyShakeScore,
+                continuousVibrationScore: s.continuousVibrationScore,
+                impactBaseline: s.impactBaseline,
+                impactPeakRatio: s.impactPeakRatio,
+                startCandidate: s.startCandidate,
+                stopCandidate: s.stopCandidate,
+                engineTransitionConfirmed: s.engineTransitionConfirmed,
+                transitionVibrationDelta: s.transitionVibrationDelta,
+                transitionNoiseDelta: s.transitionNoiseDelta,
+                steadyPowertrainScore: s.steadyPowertrainScore,
+                transitionSmoothnessScore: s.transitionSmoothnessScore,
+                totalNoise: s.totalNoise,
+                lowFrequencyNoise: s.lowFrequencyNoise,
+                midFrequencyNoise: s.midFrequencyNoise,
+                highFrequencyNoise: s.highFrequencyNoise,
+                impactEventId: s.impactEventId,
+                engineTransitionId: s.engineTransitionId
             };
         }
 
@@ -1039,7 +1306,7 @@
             g.noise += point.dbfs || 0;
             g.impact += point.impactScore || 0;
             g.engineP += point.engineProbability || 0;
-            if (point.powertrainTransition && point.powertrainTransition !== POWERTRAIN_TRANSITION.NONE) {
+            if (point.powertrainTransition === POWERTRAIN_TRANSITION.STATE_CHANGE || point.engineTransitionConfirmed) {
                 g.transition += 1;
             }
         });
@@ -1101,17 +1368,20 @@
             ? mean(stopped.map(function (p) { return p.continuousVibration || 0; }))
             : 0;
         const transitions = points.filter(function (p) {
-            return p.powertrainTransition && p.powertrainTransition !== POWERTRAIN_TRANSITION.NONE;
+            return p.powertrainTransition === POWERTRAIN_TRANSITION.STATE_CHANGE || p.engineTransitionConfirmed;
         }).length;
         const lowSpeedTrans = lowSpeed.filter(function (p) {
-            return p.powertrainTransition && p.powertrainTransition !== POWERTRAIN_TRANSITION.NONE;
+            return p.powertrainTransition === POWERTRAIN_TRANSITION.STATE_CHANGE || p.engineTransitionConfirmed;
         }).length;
+        const cruiseRide = cruise.length
+            ? mean(cruise.map(function (p) { return p.rideComfortScore != null ? p.rideComfortScore : 70; }))
+            : null;
         const road = avg('roadNoiseScore') || 0;
         const wind = avg('windNoiseScore') || 0;
 
         const character = {
             lowSpeedShake: levelFromScore(lowShake, 0.18, 0.38),
-            cruisingStability: qualityFromScore(100 - clamp(cruiseShake / 0.7 * 100, 0, 100), 72, 48),
+            cruisingStability: qualityFromScore(cruiseRide != null ? cruiseRide : 70, 78, 58),
             powertrainTransitions: freqLabel(transitions),
             roadNoise: levelFromScore(road, 28, 58),
             windNoise: levelFromScore(wind, 22, 48),
@@ -1197,6 +1467,25 @@
             num(point.rideShakeScore, 1),
             num(point.rideImpactScore, 1),
             num(point.rideStabilityScore, 1),
+            num(point.lowFrequencyShakeScore, 1),
+            num(point.continuousVibrationScore, 1),
+            num(point.impactBaseline, 3),
+            num(point.impactPeakRatio, 2),
+            point.rideComfortScore == null ? '' : String(point.rideComfortScore),
+            point.startCandidate ? 1 : 0,
+            point.stopCandidate ? 1 : 0,
+            point.engineTransitionConfirmed ? 1 : 0,
+            num(point.transitionVibrationDelta, 3),
+            num(point.transitionNoiseDelta, 2),
+            num(point.steadyPowertrainScore, 1),
+            num(point.transitionSmoothnessScore, 1),
+            point.powertrainSmoothnessScore == null ? '' : String(point.powertrainSmoothnessScore),
+            num(point.totalNoise, 1),
+            num(point.lowFrequencyNoise, 1),
+            num(point.midFrequencyNoise, 1),
+            num(point.highFrequencyNoise, 1),
+            cell(point.impactEventId || ''),
+            cell(point.engineTransitionId || ''),
             cell(point.engineDebug || '')
         ];
     }
@@ -1240,6 +1529,125 @@
         return lines;
     }
 
+    function rescorePoints(points) {
+        const cfg = CONFIG;
+        const out = (points || []).map(function (point) {
+            return Object.assign({}, point);
+        });
+        const n = out.length;
+        let impactSeq = 0;
+        let impactId = '';
+        const confirmedSmooth = [];
+        let transSeq = 0;
+
+        for (let i = 0; i < n; i++) {
+            const point = out[i];
+            const prev = [];
+            for (let k = Math.max(0, i - 5); k < i; k++) {
+                prev.push(out[k].continuousVibration || 0);
+            }
+            const baseline = prev.length ? median(prev) : (point.continuousVibration || 0);
+            const current = point.continuousVibration || 0;
+            const ratio = current / Math.max(baseline, 0.12);
+            let elevated = 0;
+            for (let k = i; k >= Math.max(0, i - 4); k--) {
+                if ((out[k].continuousVibration || 0) > baseline * 1.45) {
+                    elevated += 1;
+                } else {
+                    break;
+                }
+            }
+            const spike = (current - baseline) >= cfg.impactDeltaMps2
+                && ratio >= 1.85
+                && current >= cfg.impactMinPeakMps2
+                && elevated <= 1;
+            if (spike) {
+                if (!impactId) {
+                    impactSeq += 1;
+                    impactId = padEventId('IMPACT_', impactSeq);
+                }
+                point.impactEvent = true;
+                point.impactScore = clamp((ratio - 1) / 2.2 * 100, 0, 100);
+                point.impactEventId = impactId;
+            } else {
+                point.impactEvent = false;
+                point.impactScore = 0;
+                point.impactEventId = '';
+                impactId = '';
+            }
+            point.impactBaseline = baseline;
+            point.impactPeakRatio = ratio;
+
+            const speed = point.filteredSpeed != null ? point.filteredSpeed : (point.speed || 0);
+            const expect = expectedRideLevels(speed);
+            const shakeVal = point.shakeScore != null ? point.shakeScore : (point.shake || 0);
+            const lfScore = comfortFromExpected(shakeVal, expect.shake);
+            const contScore = comfortFromExpected(point.continuousVibration || 0, expect.vib);
+            const impactComfort = point.impactEvent ? clamp(100 - point.impactScore * 0.55, 40, 100) : 100;
+            point.lowFrequencyShakeScore = lfScore;
+            point.continuousVibrationScore = contScore;
+            point.rideComfortScore = Math.round(
+                lfScore * cfg.rideWeightShake
+                + contScore * cfg.rideWeightContinuous
+                + impactComfort * cfg.rideWeightImpact
+            );
+            point.startCandidate = point.powertrainTransition === POWERTRAIN_TRANSITION.START_CANDIDATE;
+            point.stopCandidate = point.powertrainTransition === POWERTRAIN_TRANSITION.STOP_CANDIDATE;
+            point.engineTransitionConfirmed = point.powertrainTransition === POWERTRAIN_TRANSITION.STATE_CHANGE;
+            point.steadyPowertrainScore = clamp(
+                100
+                - clamp(Math.abs(point.vibrationDelta || 0) / 0.28 * 28, 0, 35)
+                - clamp(Math.abs(point.audioDelta || 0) / 10 * 12, 0, 20),
+                0,
+                100
+            );
+        }
+
+        for (let i = 0; i < n; i++) {
+            if (!out[i].engineTransitionConfirmed) {
+                continue;
+            }
+            transSeq += 1;
+            const on = out[i].engineState === ENGINE_STATE.ON;
+            const id = padEventId(on ? 'ENG_START_' : 'ENG_STOP_', transSeq);
+            const pre = out.slice(Math.max(0, i - 3), i);
+            const post = out.slice(i, Math.min(n, i + 4));
+            const take = function (arr, key) {
+                return median(arr.map(function (item) { return item[key] || 0; }));
+            };
+            const vibDelta = Math.max(0, take(post, 'continuousVibration') - take(pre, 'continuousVibration'));
+            const noiseDelta = Math.max(0, Math.abs(take(post, 'audioDelta')) );
+            const smoothness = clamp(
+                100 - clamp(vibDelta / 0.35 * 40, 0, 50) - clamp(noiseDelta / 8 * 30, 0, 40),
+                0,
+                100
+            );
+            confirmedSmooth.push(smoothness);
+            for (let k = i; k < Math.min(n, i + 4); k++) {
+                out[k].engineTransitionId = id;
+                out[k].transitionVibrationDelta = vibDelta;
+                out[k].transitionNoiseDelta = noiseDelta;
+                out[k].transitionSmoothnessScore = smoothness;
+            }
+        }
+
+        const transMean = confirmedSmooth.length ? mean(confirmedSmooth) : 100;
+        for (let i = 0; i < n; i++) {
+            if (out[i].transitionSmoothnessScore == null) {
+                out[i].transitionSmoothnessScore = transMean;
+            }
+            out[i].powertrainSmoothnessScore = Math.round(
+                confirmedSmooth.length
+                    ? transMean * cfg.powertrainWeightTransition + out[i].steadyPowertrainScore * cfg.powertrainWeightSteady
+                    : out[i].steadyPowertrainScore
+            );
+        }
+        return {
+            points: out,
+            summary: summarizeSession(out)
+        };
+    }
+
     global.DriveVehicle = {
         CONFIG: CONFIG,
         DRIVING_STATE: DRIVING_STATE,
@@ -1253,6 +1661,7 @@
         summarizeSession: summarizeSession,
         serializePoint: serializePoint,
         summaryComments: summaryComments,
-        levelFromScore: levelFromScore
+        levelFromScore: levelFromScore,
+        rescorePoints: rescorePoints
     };
 })(window);
