@@ -118,6 +118,8 @@ class SensorManager {
         this.lastSampleAt = 0;
         this.resumingSensors = false;
         this.gpsRestartTimer = null;
+        this.motionPermission = null;
+        this.orientationPermission = null;
 
         this.sampleTimer = null;
         this.session = this.createEmptySession();
@@ -422,32 +424,57 @@ class SensorManager {
         }
     }
 
+    async ensureMotionPermission() {
+        if (!window.DeviceMotionEvent) {
+            this.notifyListeners('error', { message: 'このブラウザは加速度センサーに対応していません。' });
+            return false;
+        }
+        if (typeof DeviceMotionEvent.requestPermission !== 'function') {
+            this.motionPermission = 'granted';
+            return true;
+        }
+        try {
+            const state = await DeviceMotionEvent.requestPermission();
+            this.motionPermission = state;
+            if (state !== 'granted') {
+                this.notifyListeners('error', { message: '加速度センサーの許可が拒否されました。' });
+                return false;
+            }
+        } catch (error) {
+            console.error(error);
+            this.notifyListeners('error', {
+                message: '加速度センサーを開始できません。開始をもう一度押してください。'
+            });
+            return false;
+        }
+        if (window.DeviceOrientationEvent &&
+            typeof DeviceOrientationEvent.requestPermission === 'function' &&
+            this.orientationPermission !== 'granted') {
+            try {
+                this.orientationPermission = await DeviceOrientationEvent.requestPermission();
+            } catch (error) {
+                console.error(error);
+            }
+        }
+        return true;
+    }
+
     async startAccelerationTracking() {
         if (!window.DeviceMotionEvent) {
             this.notifyListeners('error', { message: 'このブラウザは加速度センサーに対応していません。' });
             return;
         }
-
-        try {
-            if (typeof DeviceMotionEvent.requestPermission === 'function') {
-                const permissionState = await DeviceMotionEvent.requestPermission();
-                if (!this.isRecording) {
-                    return;
-                }
-                if (permissionState !== 'granted') {
-                    this.notifyListeners('error', { message: '加速度センサーの許可が拒否されました。' });
-                    return;
-                }
-            }
-            if (!this.isRecording) {
+        if (this.motionPermission !== 'granted') {
+            const ok = await this.ensureMotionPermission();
+            if (!ok) {
                 return;
             }
-            window.addEventListener('devicemotion', this.boundMotionHandler);
-            this.startOrientationTracking();
-        } catch (error) {
-            this.notifyListeners('error', { message: '加速度センサーを開始できません。' });
-            console.error(error);
         }
+        if (!this.isRecording) {
+            return;
+        }
+        window.addEventListener('devicemotion', this.boundMotionHandler);
+        this.startOrientationTracking();
     }
 
     handleMotionEvent(event) {
@@ -620,8 +647,10 @@ class SensorManager {
         }
         try {
             if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-                const permissionState = await DeviceOrientationEvent.requestPermission();
-                if (!this.isRecording || permissionState !== 'granted') {
+                if (this.orientationPermission !== 'granted') {
+                    this.orientationPermission = await DeviceOrientationEvent.requestPermission();
+                }
+                if (!this.isRecording || this.orientationPermission !== 'granted') {
                     return;
                 }
             }
@@ -1129,6 +1158,12 @@ class SensorManager {
         if (this.calibrating) {
             this.notifyListeners('error', { message: '校正中は計測を開始できません。' });
             return;
+        }
+        if (!this.isDemoMode()) {
+            const motionOk = await this.ensureMotionPermission();
+            if (!motionOk) {
+                return;
+            }
         }
         this.resetSession();
         this.isRecording = true;
