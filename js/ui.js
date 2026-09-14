@@ -93,6 +93,7 @@ class UIManager {
         this.calClear = document.getElementById('calClear');
         this.pendingCalPeak = null;
         this.charts = new NervCharts();
+        this.statusTimer = null;
 
         this.initMap();
         this.initEventListeners();
@@ -120,12 +121,28 @@ class UIManager {
         if (!this.statusBanner) {
             return;
         }
-        if (!isError) {
+        if (this.statusTimer) {
+            clearTimeout(this.statusTimer);
+            this.statusTimer = null;
+        }
+        if (!message) {
             this.statusBanner.hidden = true;
+            this.statusBanner.textContent = '';
+            this.statusBanner.classList.remove('is-info');
             return;
         }
-        this.statusBanner.hidden = !message;
-        this.statusBanner.textContent = message || '';
+        this.statusBanner.hidden = false;
+        this.statusBanner.textContent = message;
+        this.statusBanner.classList.toggle('is-info', !isError);
+        if (!isError) {
+            this.statusTimer = setTimeout(() => {
+                if (this.statusBanner.textContent === message) {
+                    this.statusBanner.hidden = true;
+                    this.statusBanner.classList.remove('is-info');
+                }
+                this.statusTimer = null;
+            }, 8000);
+        }
     }
 
     observeCockpit() {
@@ -228,6 +245,17 @@ class UIManager {
         });
 
         this.sensorManager.addDataListener(this.updateUI.bind(this));
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState !== 'visible') {
+                return;
+            }
+            if (this.map) {
+                setTimeout(() => this.map.invalidateSize(), 80);
+            }
+            if (this.charts) {
+                this.charts.fitCanvases();
+            }
+        });
     }
 
     openSettings() {
@@ -367,6 +395,25 @@ class UIManager {
             this.resetTrack();
             if (sys) {
                 sys.textContent = data.demo ? 'MAGI-LINK // DEMO' : 'MAGI-LINK // ACTIVE';
+            }
+            this.showStatus(
+                data.wakeLock === false
+                    ? 'この端末は画面オフ防止に未対応です。計測中は画面が消えないよう設定し、アプリを前面に保ってください。'
+                    : '計測中は画面をオンのまま、このアプリを前面に保ってください。画面オフや他アプリへ移るとGPS・マイクが止まり、記録に空白ができます。',
+                false
+            );
+        }
+        if (data.state === 'paused-gap') {
+            const sec = Math.max(1, Math.round((data.gapMs || 0) / 1000));
+            this.showStatus(
+                `画面オフ中はセンサーが停止していました。約${sec}秒の空白があります。計測中は画面をオン、アプリを前面に保ってください。`,
+                false
+            );
+            if (this.map) {
+                setTimeout(() => this.map.invalidateSize(), 50);
+            }
+            if (this.charts) {
+                this.charts.fitCanvases();
             }
         }
         if (data.state === 'stopped') {

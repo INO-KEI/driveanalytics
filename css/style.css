@@ -125,6 +125,12 @@ button:disabled {
     font-size: 0.75rem;
 }
 
+#status-banner.is-info {
+    background: #1a1608;
+    color: #ffcc80;
+    border-color: var(--orange);
+}
+
 #status-banner[hidden] {
     display: none;
 }

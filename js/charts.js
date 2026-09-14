@@ -70,7 +70,7 @@ class NervCharts {
     }
 
     ingest(partial) {
-        Object.assign(this.snapshot, partial, { t: performance.now() });
+        Object.assign(this.snapshot, partial, { t: Date.now() });
         const now = this.snapshot.t;
         if (now - this.lastPush < 120) {
             this.dirty = true;
@@ -274,7 +274,7 @@ class NervCharts {
         const w = canvas.width;
         const h = canvas.height;
         this.drawFrame(ctx, w, h);
-        const now = performance.now();
+        const now = Date.now();
         const pts = this.history;
         const maxV = Math.max(80, ...pts.map((p) => p.speed || 0));
 
@@ -384,7 +384,7 @@ class NervCharts {
         const w = canvas.width;
         const h = canvas.height;
         this.drawFrame(ctx, w, h);
-        const now = performance.now();
+        const now = Date.now();
         const pts = this.history;
         const scale = this.vibScale();
         const yMax = scale.yMax;
@@ -465,7 +465,7 @@ class NervCharts {
         const w = canvas.width;
         const h = canvas.height;
         this.drawFrame(ctx, w, h);
-        const now = performance.now();
+        const now = Date.now();
         const pts = this.history;
         const calibrated = pts.some((p) => p.calibrated);
         const yMin = calibrated ? -50 : -80;

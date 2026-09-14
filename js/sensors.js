@@ -111,11 +111,125 @@ class SensorManager {
         this.driveMode = 'unset';
         this.driveEvent = 'none';
         this.lastUiNotify = { acceleration: 0, noise: 0 };
+        this.wakeLockSentinel = null;
+        this.wakeLockRequesting = false;
+        this.backgroundedAt = 0;
+        this.lastGpsTimestamp = 0;
+        this.lastSampleAt = 0;
+        this.resumingSensors = false;
+        this.gpsRestartTimer = null;
 
         this.sampleTimer = null;
         this.session = this.createEmptySession();
         this.dataListeners = [];
         this.loadCalibration();
+        this.bindLifecycle();
+    }
+
+    bindLifecycle() {
+        this.boundVisibility = () => {
+            if (document.visibilityState === 'visible') {
+                this.handleForeground();
+            } else {
+                this.handleBackground();
+            }
+        };
+        document.addEventListener('visibilitychange', this.boundVisibility);
+        window.addEventListener('pageshow', () => {
+            if (document.visibilityState === 'visible') {
+                this.handleForeground();
+            }
+        });
+    }
+
+    handleBackground() {
+        if (!this.isRecording) {
+            return;
+        }
+        this.backgroundedAt = Date.now();
+        this.releaseWakeLock();
+    }
+
+    async handleForeground() {
+        if (!this.isRecording || document.visibilityState !== 'visible') {
+            return;
+        }
+        if (this.resumingSensors) {
+            return;
+        }
+        const now = Date.now();
+        const hiddenMs = this.backgroundedAt ? now - this.backgroundedAt : 0;
+        const sampleGap = this.lastSampleAt ? now - this.lastSampleAt : 0;
+        const gpsGap = this.lastGpsTimestamp ? now - this.lastGpsTimestamp : 0;
+        this.backgroundedAt = 0;
+        this.resumingSensors = true;
+        try {
+            await this.resumeSensors({ restartGps: hiddenMs > 1200 || gpsGap > 2500 });
+            const gapMs = Math.max(hiddenMs, sampleGap);
+            if (gapMs > 2500) {
+                this.notifyListeners('session', Object.assign(this.getSessionSummary(), {
+                    state: 'paused-gap',
+                    gapMs: gapMs
+                }));
+            }
+        } finally {
+            this.resumingSensors = false;
+        }
+    }
+
+    async resumeSensors(options) {
+        options = options || {};
+        await this.acquireWakeLock();
+        if (this.audioContext && this.audioContext.state === 'suspended') {
+            try {
+                await this.audioContext.resume();
+            } catch (error) {
+                console.error(error);
+            }
+        }
+        if (this.isRecording && this.analyzer && this.noiseRafId == null) {
+            this.processNoiseData();
+        }
+        if (options.restartGps && !this.isDemoMode()) {
+            this.restartLocationTracking();
+        }
+    }
+
+    async acquireWakeLock() {
+        if (this.wakeLockSentinel || this.wakeLockRequesting) {
+            return;
+        }
+        if (!this.isRecording || document.visibilityState !== 'visible') {
+            return;
+        }
+        if (!navigator.wakeLock || typeof navigator.wakeLock.request !== 'function') {
+            return;
+        }
+        this.wakeLockRequesting = true;
+        try {
+            const sentinel = await navigator.wakeLock.request('screen');
+            this.wakeLockSentinel = sentinel;
+            sentinel.addEventListener('release', () => {
+                if (this.wakeLockSentinel === sentinel) {
+                    this.wakeLockSentinel = null;
+                }
+                if (this.isRecording && document.visibilityState === 'visible' && !this.wakeLockSentinel) {
+                    this.acquireWakeLock();
+                }
+            });
+        } catch (error) {
+            this.wakeLockSentinel = null;
+        } finally {
+            this.wakeLockRequesting = false;
+        }
+    }
+
+    releaseWakeLock() {
+        const sentinel = this.wakeLockSentinel;
+        this.wakeLockSentinel = null;
+        if (sentinel) {
+            sentinel.release().catch(function () {});
+        }
     }
 
     createEmptySession() {
@@ -135,15 +249,23 @@ class SensorManager {
             return;
         }
 
+        this.stopLocationTracking();
         this.locationWatchId = navigator.geolocation.watchPosition(
             this.boundLocationUpdate,
             this.boundLocationError,
             {
                 enableHighAccuracy: true,
-                timeout: 8000,
-                maximumAge: 0
+                timeout: 20000,
+                maximumAge: 2000
             }
         );
+    }
+
+    restartLocationTracking() {
+        if (!this.isRecording || this.isDemoMode()) {
+            return;
+        }
+        this.startLocationTracking();
     }
 
     handleLocationUpdate(position) {
@@ -194,6 +316,7 @@ class SensorManager {
         this.locationData.accuracy = coords.accuracy;
         this.locationData.timestamp = position.timestamp;
         this.locationData.drivingState = gpsQuality.drivingState;
+        this.lastGpsTimestamp = Date.now();
 
         if (this.isRecording && this.session.lastFix) {
             const dt = (position.timestamp - this.session.lastFix.timestamp) / 1000;
@@ -278,7 +401,18 @@ class SensorManager {
     }
 
     handleLocationError(error) {
-        this.notifyListeners('error', { message: '位置情報を取得できません: ' + error.message });
+        if (error && error.code === 3) {
+            return;
+        }
+        if (error && error.code === 1) {
+            this.notifyListeners('error', { message: '位置情報の許可が拒否されました。' });
+            return;
+        }
+        this.notifyListeners('error', { message: '位置情報を取得できません: ' + (error && error.message ? error.message : '不明なエラー') });
+        if (this.isRecording && !this.isDemoMode()) {
+            clearTimeout(this.gpsRestartTimer);
+            this.gpsRestartTimer = setTimeout(() => this.restartLocationTracking(), 1500);
+        }
     }
 
     stopLocationTracking() {
@@ -537,6 +671,13 @@ class SensorManager {
 
             this.mediaStream = stream;
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            this.audioContext.onstatechange = () => {
+                if (this.isRecording && this.audioContext &&
+                    this.audioContext.state === 'suspended' &&
+                    document.visibilityState === 'visible') {
+                    this.audioContext.resume().catch(function () {});
+                }
+            };
             if (this.audioContext.state === 'suspended') {
                 await this.audioContext.resume();
             }
@@ -560,6 +701,11 @@ class SensorManager {
     processNoiseData() {
         if (!this.isRecording || !this.analyzer) {
             this.noiseRafId = null;
+            return;
+        }
+
+        if (document.hidden || (this.audioContext && this.audioContext.state !== 'running')) {
+            this.noiseRafId = requestAnimationFrame(this.boundNoiseFrame);
             return;
         }
 
@@ -669,6 +815,9 @@ class SensorManager {
         if (loc.latitude == null || loc.longitude == null) {
             return;
         }
+        if (this.lastGpsTimestamp && Date.now() - this.lastGpsTimestamp > 3500) {
+            return;
+        }
 
         const speed = this.locationData.filteredSpeed != null
             ? this.locationData.filteredSpeed
@@ -682,7 +831,12 @@ class SensorManager {
         if (prevPoint && prevPoint.driveEvent === 'stop' && speed >= 4 && speed < 40) {
             sampleEvent = 'launch';
         }
-        if (speed >= 15 && !this.noiseData.voiceDetected && this.noiseData.dbfsRaw > -90) {
+        const audioLive = this.isDemoMode() || (
+            this.audioContext &&
+            this.audioContext.state === 'running' &&
+            !document.hidden
+        );
+        if (audioLive && speed >= 15 && !this.noiseData.voiceDetected && this.noiseData.dbfsRaw > -90) {
             this.session.movingDbfsSum += this.noiseData.dbfs;
             this.session.movingDbfsCount += 1;
         }
@@ -735,6 +889,7 @@ class SensorManager {
             distanceM: this.session.distanceM,
             elapsedMs: Date.now() - this.session.startedAt
         };
+        this.lastSampleAt = point.time;
         this.A.FINE_BANDS.forEach((band) => {
             point[band.key + 'Db'] = this.noiseData[band.key + 'Db'];
             point[band.key + 'Share'] = this.noiseData[band.key + 'Share'];
@@ -838,6 +993,9 @@ class SensorManager {
         this.longAccel = 0;
         this.locationData.accelMps2 = 0;
         this.lastUiNotify = { acceleration: 0, noise: 0 };
+        this.backgroundedAt = 0;
+        this.lastGpsTimestamp = 0;
+        this.lastSampleAt = 0;
         this.speechMidHistory = [];
         this.voiceHoldUntil = 0;
         this.lastCleanRaw = null;
@@ -974,10 +1132,12 @@ class SensorManager {
         }
         this.resetSession();
         this.isRecording = true;
+        await this.acquireWakeLock();
         const token = this.session.startedAt;
         this.notifyListeners('session', Object.assign(this.getSessionSummary(), {
             state: 'started',
-            demo: this.isDemoMode()
+            demo: this.isDemoMode(),
+            wakeLock: Boolean(this.wakeLockSentinel)
         }));
 
         if (this.isDemoMode()) {
@@ -1009,6 +1169,11 @@ class SensorManager {
             this.emitSample();
         }
         this.isRecording = false;
+        this.releaseWakeLock();
+        if (this.gpsRestartTimer) {
+            clearTimeout(this.gpsRestartTimer);
+            this.gpsRestartTimer = null;
+        }
         this.stopSampling();
         this.stopDemoLoop();
         this.stopLocationTracking();
