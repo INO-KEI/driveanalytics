@@ -13,7 +13,8 @@ class NervCharts {
             motion: document.getElementById('hud-motion'),
             comfort: document.getElementById('hud-comfort'),
             noise: document.getElementById('hud-noise'),
-            noiseSrc: document.getElementById('hud-noise-src')
+            noiseSrc: document.getElementById('hud-noise-src'),
+            rpm: document.getElementById('hud-rpm')
         };
         this.history = [];
         this.windowMs = 40000;
@@ -33,32 +34,24 @@ class NervCharts {
             accelMps2: 0,
             rms: 0,
             shake: 0,
-            combinedRms: 0,
+            continuousVibration: 0,
             peak: 0,
             freq: 0,
             comfort: '',
             comfortClass: '',
-            vibKind: 'none',
-            vibLabel: '',
-            vibClass: '',
             dbfs: -100,
             quietness: null,
             voice: false,
             calibrated: false,
-            engineDb: -100,
-            roadDb: -100,
-            windDb: -100,
-            engineShare: 0,
-            roadShare: 0,
-            windShare: 0,
             engineNoiseScore: 0,
             roadNoiseScore: 0,
             windNoiseScore: 0,
-            dominant: 'none',
             engineState: 'UNKNOWN',
             driveEvent: 'none',
             drivingState: 'UNKNOWN',
-            impactEvent: false
+            impactEvent: false,
+            engineRpm: null,
+            engineRpmConfidence: 0
         };
     }
 
@@ -105,12 +98,12 @@ class NervCharts {
                 || '--';
         }
         if (this.hud.motion) {
-            this.hud.motion.textContent = `${(s.combinedRms || 0).toFixed(2)}`;
+            this.hud.motion.textContent = `${(s.continuousVibration || 0).toFixed(2)}`;
         }
         if (this.hud.comfort) {
             const label = s.comfort || '--';
             this.hud.comfort.textContent = label;
-            this.hud.comfort.className = `hud-push comfort-chip ${s.comfortClass || ''}`;
+            this.hud.comfort.className = `hud-push hud-chip comfort-chip ${s.comfortClass || ''}`;
         }
         if (this.hud.noise) {
             this.hud.noise.textContent = s.calibrated
@@ -125,6 +118,16 @@ class NervCharts {
                 UNKNOWN: '--'
             };
             this.hud.noiseSrc.textContent = short[state] || '--';
+        }
+        if (this.hud.rpm) {
+            if (s.engineRpm == null) {
+                this.hud.rpm.textContent = '--';
+                this.hud.rpm.className = 'hud-chip';
+            } else {
+                this.hud.rpm.textContent = `${s.engineRpm}rpm`;
+                const lowConfidence = (s.engineRpmConfidence || 0) < 0.5;
+                this.hud.rpm.className = `hud-chip${lowConfidence ? ' rpm-low-confidence' : ''}`;
+            }
         }
     }
 
@@ -350,22 +353,6 @@ class NervCharts {
         });
     }
 
-    strokeSegmented(ctx, points, now, w, h, getter, yMin, yMax, colorOf, width) {
-        if (points.length < 2) {
-            return;
-        }
-        ctx.lineWidth = width;
-        ctx.lineJoin = 'round';
-        ctx.lineCap = 'round';
-        for (let i = 1; i < points.length; i++) {
-            ctx.beginPath();
-            ctx.moveTo(this.axisX(points[i - 1].t, now, w), this.yOf(getter(points[i - 1]), yMin, yMax, h));
-            ctx.lineTo(this.axisX(points[i].t, now, w), this.yOf(getter(points[i]), yMin, yMax, h));
-            ctx.strokeStyle = colorOf(points[i]);
-            ctx.stroke();
-        }
-    }
-
     vibScale() {
         return (window.DriveAnalysis && window.DriveAnalysis.VIB_CHART) || {
             yMax: 3,
@@ -388,12 +375,7 @@ class NervCharts {
         const pts = this.history;
         const scale = this.vibScale();
         const yMax = scale.yMax;
-        const colors = (window.DriveAnalysis && window.DriveAnalysis.VIB_KIND_COLOR) || {
-            drone: '#ffd200',
-            rough: '#ff7a18',
-            impact: '#ff3b30',
-            none: '#ffd200'
-        };
+        const vibColor = '#ffd200';
         const clampY = (value) => Math.max(0, Math.min(yMax, value || 0));
 
         const zone = (y0, y1, fill) => {
@@ -420,14 +402,13 @@ class NervCharts {
 
         this.fillToBaseline(
             ctx, pts, now, w, h,
-            (p) => clampY(p.combinedRms), 0, yMax,
+            (p) => clampY(p.continuousVibration), 0, yMax,
             'rgba(255, 210, 0, 0.16)', 0
         );
-        this.strokeSegmented(
+        this.strokeLine(
             ctx, pts, now, w, h,
-            (p) => clampY(p.combinedRms), 0, yMax,
-            (p) => colors[p.vibKind] || colors.drone,
-            2.4
+            (p) => clampY(p.continuousVibration), 0, yMax,
+            vibColor, 2.4
         );
         this.strokeLine(
             ctx, pts, now, w, h,
@@ -436,7 +417,7 @@ class NervCharts {
         );
 
         pts.forEach((p) => {
-            if (p.vibKind !== 'impact' && !p.impactEvent) {
+            if (!p.impactEvent) {
                 return;
             }
             const x = this.axisX(p.t, now, w);
@@ -446,8 +427,8 @@ class NervCharts {
 
         this.glowLast(
             ctx, pts, now, w, h,
-            (p) => clampY(p.combinedRms), 0, yMax,
-            colors[(pts[pts.length - 1] && pts[pts.length - 1].vibKind) || 'drone']
+            (p) => clampY(p.continuousVibration), 0, yMax,
+            vibColor
         );
 
         this.label(ctx, yMax.toFixed(1), 6, 14, 'rgba(255,210,0,0.75)');

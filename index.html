@@ -56,7 +56,7 @@
                             <span class="graph-title">速度</span>
                             <span class="legend"><i class="lg-green"></i>km/h</span>
                             <span class="legend"><i class="lg-accel"></i>加速</span>
-                            <b id="hud-event">--</b>
+                            <b id="hud-event" class="hud-chip">--</b>
                             <b id="hud-accel">--</b>
                             <b id="hud-speed" class="hud-push">-- km/h</b>
                         </div>
@@ -79,6 +79,7 @@
                             <span class="panel-code">SPL</span>
                             <span class="graph-title">静粛 / 音圧</span>
                             <b id="hud-noise-src" class="hud-src">--</b>
+                            <b id="hud-rpm" class="hud-chip">--</b>
                             <b id="hud-noise" class="hud-push">--</b>
                         </div>
                         <canvas id="chart-noise"></canvas>
@@ -126,6 +127,7 @@
                         <div id="gps-quality">GPS: --</div>
                         <div id="drive-event">状態: --</div>
                         <div id="engine-state">パワートレーン: --</div>
+                        <div id="engine-rpm" hidden>推定回転数: -- RPM（信頼度 --%）</div>
                         <div id="drive-mode">モード: 未設定</div>
                         <div id="long-accel">加速: -- m/s²</div>
                         <div id="average-speed">平均速度: -- km/h</div>
@@ -138,7 +140,6 @@
                         <div id="vibration-xyz">XYZ RMS: -- Peak: -- Std: --</div>
                         <div id="vibration-combined">合成 RMS: --</div>
                         <div id="vibration-level">上下 RMS: --</div>
-                        <div id="vibration-source">要因: --</div>
                         <div id="vibration-freq">卓越周波数: -- Hz</div>
                         <div id="comfort">判定: --</div>
                         <div id="lateral-g">横G（コーナリング）: -- G</div>
@@ -152,7 +153,6 @@
                         <div id="quietness">Quietness: -- / 100</div>
                         <div id="noise-independent">Engine -- / Road -- / Wind --</div>
                         <div id="ev-likelihood">EV-like: --</div>
-                        <div id="noise-dominant" hidden>主因: --</div>
                         <div id="voice-flag" class="hint" hidden>ナビ/会話を検出。この瞬間は静粛性から除外しています。</div>
                         <p class="hint" id="noise-hint">未校正です。表示は Relative Sound Level で、絶対音圧(dB SPL)ではありません。</p>
                         <p class="hint">Engine / Road / Wind は独立スコアです。合計100%にはしません。</p>
@@ -161,38 +161,6 @@
                             <div class="score-bar-row"><span>Road</span><div class="band-track"><div id="score-road-fill" class="band-fill road"></div></div><b id="score-road-label">--</b></div>
                             <div class="score-bar-row"><span>Wind</span><div class="band-track"><div id="score-wind-fill" class="band-fill wind"></div></div><b id="score-wind-label">--</b></div>
                         </div>
-                        <details class="legacy-noise">
-                            <summary>Legacy 騒音分類（検証用）</summary>
-                            <p class="hint">旧ロジックの 20–250Hz 中心配分です。UIの主判定には使いません。</p>
-                            <div class="band-mix">
-                                <div class="band-mix-track">
-                                    <div id="band-engine" class="band-fill engine"></div>
-                                    <div id="band-road" class="band-fill road"></div>
-                                    <div id="band-wind" class="band-fill wind"></div>
-                                </div>
-                                <div class="band-mix-legend">
-                                    <div class="band-label" id="band-engine-label">エンジン --</div>
-                                    <div class="band-label" id="band-road-label">ロードノイズ --</div>
-                                    <div class="band-label" id="band-wind-label">風切り音 --</div>
-                                </div>
-                                <div class="band-mix-track fine">
-                                    <div id="band-boom" class="band-fill boom"></div>
-                                    <div id="band-power" class="band-fill power"></div>
-                                    <div id="band-struct" class="band-fill struct"></div>
-                                    <div id="band-tire" class="band-fill tire"></div>
-                                    <div id="band-cabin" class="band-fill cabin"></div>
-                                    <div id="band-aero" class="band-fill aero"></div>
-                                </div>
-                                <div class="band-mix-legend fine">
-                                    <div class="band-label" id="band-boom-label">低周波 --</div>
-                                    <div class="band-label" id="band-power-label">エンジン --</div>
-                                    <div class="band-label" id="band-struct-label">路面低 --</div>
-                                    <div class="band-label" id="band-tire-label">ロード --</div>
-                                    <div class="band-label" id="band-cabin-label">中高 --</div>
-                                    <div class="band-label" id="band-aero-label">風切 --</div>
-                                </div>
-                            </div>
-                        </details>
                     </div>
                 </div>
 
@@ -204,7 +172,7 @@
                             <button type="button" id="csvMail" disabled>メールで送る</button>
                         </div>
                     </div>
-                    <p id="track-empty" class="hint">計測を開始すると、1秒ごとの地点が地図と表に残ります。CSVには Legacy と New Model の両方が入ります。</p>
+                    <p id="track-empty" class="hint">計測を開始すると、1秒ごとの地点が地図と表に残ります。</p>
                     <p class="hint" id="export-hint">1秒ごとに1行です。表は直近400件、全件はCSVに入ります。画面を付けたままならデータ上は8〜12時間、電池とバックグラウンド制限で2〜4時間が目安です。</p>
                     <div class="table-scroll">
                         <table id="track-table">
@@ -258,6 +226,23 @@
                     <button type="button" id="calStart">校正を開始（8秒）</button>
                     <button type="button" id="calSave" disabled>このピークを採用</button>
                     <button type="button" id="calClear" class="button-secondary">校正をクリア</button>
+                </div>
+            </section>
+            <section class="settings-section">
+                <h3>エンジン回転数の推定（任意）</h3>
+                <p class="hint">気筒数を入力すると、マイクの音からエンジン回転数を推定します（4ストローク前提の参考値。誤差があります）。EV走行中やエンジン停止中は表示されません。分からない場合は未設定のままで構いません。</p>
+                <div class="settings-row">
+                    <label for="cylinderSelect">気筒数</label>
+                    <select id="cylinderSelect">
+                        <option value="">未設定</option>
+                        <option value="3">3気筒</option>
+                        <option value="4">4気筒</option>
+                        <option value="5">5気筒</option>
+                        <option value="6">6気筒</option>
+                        <option value="8">8気筒</option>
+                        <option value="10">10気筒</option>
+                        <option value="12">12気筒</option>
+                    </select>
                 </div>
             </section>
         </div>

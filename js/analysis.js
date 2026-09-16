@@ -100,35 +100,6 @@
         return 20 * Math.log10(peak);
     }
 
-    // 車内NVH。3分類はUI用、細帯域はCSV分析用。
-    const FINE_BANDS = [
-        { key: 'boom', low: 20, high: 80, group: 'engine', label: '低周波' },
-        { key: 'power', low: 80, high: 250, group: 'engine', label: 'エンジン' },
-        { key: 'struct', low: 250, high: 500, group: 'road', label: '路面低' },
-        { key: 'tire', low: 500, high: 1600, group: 'road', label: 'ロード' },
-        { key: 'cabin', low: 1600, high: 3500, group: 'wind', label: '中高' },
-        { key: 'aero', low: 3500, high: 8000, group: 'wind', label: '風切' }
-    ];
-
-    const NOISE_BANDS = {
-        engine: { low: 20, high: 250, label: 'エンジン' },
-        road: { low: 250, high: 1600, label: 'ロードノイズ' },
-        wind: { low: 1600, high: 8000, label: '風切り音' }
-    };
-
-    const NOISE_DOMINANT_LABEL = {
-        engine: 'エンジン',
-        road: 'ロードノイズ',
-        wind: '風切り音',
-        boom: '低周波',
-        power: 'エンジン',
-        struct: '路面低',
-        tire: 'ロード',
-        cabin: '中高',
-        aero: '風切',
-        none: '--'
-    };
-
     const DRIVE_MODES = [
         { id: 'unset', label: '未設定' },
         { id: 'eco', label: 'Eco' },
@@ -180,85 +151,38 @@
         return count ? power / count : 0;
     }
 
-    function emptyBandSplit() {
-        const out = {
-            engineDb: -100,
-            roadDb: -100,
-            windDb: -100,
-            engineShare: 0,
-            roadShare: 0,
-            windShare: 0,
-            dominant: 'none',
-            dominantFine: 'none'
-        };
-        FINE_BANDS.forEach(function (band) {
-            out[band.key + 'Db'] = -100;
-            out[band.key + 'Share'] = 0;
-        });
-        return out;
-    }
-
-    function splitFromPowers(overallDbfs, powers) {
-        const keys = Object.keys(powers);
-        let total = 0;
-        keys.forEach(function (key) {
-            total += Math.max(0, powers[key] || 0);
-        });
-        const out = {};
-        if (!(total > 0) || !isFinite(overallDbfs)) {
-            keys.forEach(function (key) {
-                out[key + 'Db'] = -100;
-                out[key + 'Share'] = 0;
-            });
-            out.dominant = 'none';
-            return out;
-        }
-        let best = keys[0];
-        keys.forEach(function (key) {
-            const share = powers[key] / total;
-            out[key + 'Share'] = share;
-            out[key + 'Db'] = overallDbfs + 10 * Math.log10(Math.max(share, 1e-12));
-            if ((powers[key] || 0) > (powers[best] || 0)) {
-                best = key;
+    // 指定範囲[fLow,fHigh]内で最もdBが高いビンを1つ探す（エンジン回転数推定のピーク検出用）
+    function peakBinInRange(freqDb, sampleRate, fftSize, fLow, fHigh) {
+        const range = bandBinRange(sampleRate, fftSize, freqDb.length, fLow, fHigh);
+        const binHz = sampleRate / fftSize;
+        let bestIdx = -1;
+        let bestDb = -Infinity;
+        for (let i = range.i0; i < range.i1; i++) {
+            const db = freqDb[i];
+            if (isFinite(db) && db > bestDb) {
+                bestDb = db;
+                bestIdx = i;
             }
-        });
-        out.dominant = best;
-        return out;
+        }
+        if (bestIdx < 0) {
+            return null;
+        }
+        return { hz: bestIdx * binHz, db: bestDb, bin: bestIdx };
     }
 
-    function bandsFromFinePowers(overallDbfs, finePowers) {
-        const groupPowers = { engine: 0, road: 0, wind: 0 };
-        FINE_BANDS.forEach(function (band) {
-            groupPowers[band.group] += Math.max(0, finePowers[band.key] || 0);
-        });
-        const grouped = splitFromPowers(overallDbfs, groupPowers);
-        const fine = splitFromPowers(overallDbfs, finePowers);
-        const merged = emptyBandSplit();
-        Object.assign(merged, fine, grouped);
-        merged.dominantFine = fine.dominant;
-        return merged;
-    }
-
-    // 全体の音圧をFFT帯域の積分パワー比で按分する
-    function splitOverallDbfs(overallDbfs, engineP, roadP, windP) {
-        return bandsFromFinePowers(overallDbfs, {
-            boom: (engineP || 0) * 0.45,
-            power: (engineP || 0) * 0.55,
-            struct: (roadP || 0) * 0.35,
-            tire: (roadP || 0) * 0.65,
-            cabin: (windP || 0) * 0.4,
-            aero: (windP || 0) * 0.6
-        });
-    }
-
-    function audioBands(freqDb, sampleRate, fftSize, overallDbfs) {
-        const finePowers = {};
-        FINE_BANDS.forEach(function (band) {
-            finePowers[band.key] = bandIntegratedPower(
-                freqDb, sampleRate, fftSize, band.low, band.high
-            );
-        });
-        return bandsFromFinePowers(overallDbfs, finePowers);
+    // 指定範囲の平均dB（周囲の暗騒音レベルの目安）
+    function avgDbInRange(freqDb, sampleRate, fftSize, fLow, fHigh) {
+        const range = bandBinRange(sampleRate, fftSize, freqDb.length, fLow, fHigh);
+        let sum = 0;
+        let count = 0;
+        for (let i = range.i0; i < range.i1; i++) {
+            const db = freqDb[i];
+            if (isFinite(db)) {
+                sum += db;
+                count++;
+            }
+        }
+        return count ? sum / count : -100;
     }
 
     function axisStats(samples) {
@@ -459,13 +383,6 @@
         };
     }
 
-    // 上下RMSと水平面RMSの合成（二乗和平方根）。エンジン・路面の3軸揺れを1つの大きさにする
-    function combineVibrationRms(vertRms, horizRms) {
-        const v = vertRms || 0;
-        const h = horizRms || 0;
-        return Math.sqrt(v * v + h * h);
-    }
-
     // 振幅グラフの固定縮尺 [m/s²]。ISO 2631-1 の「極めて不快」(1.6) が上部に来る
     const VIB_CHART = {
         yMax: 3.0,
@@ -473,57 +390,6 @@
         droneHigh: 0.32,
         impactHigh: 0.8
     };
-
-    const VIB_KIND_LABEL = {
-        drone: 'エンジン・路面',
-        rough: '強い路面',
-        impact: '乗り上げ',
-        none: '--'
-    };
-
-    const VIB_KIND_COLOR = {
-        drone: '#ffd200',
-        rough: '#ff7a18',
-        impact: '#ff3b30',
-        none: '#8a6a45'
-    };
-
-    // 振れ幅（片振幅）とRMSの比で、持続振動と衝撃を分ける
-    function classifyVibration(vertRms, peakToPeak) {
-        const rms = vertRms || 0;
-        const peakAmp = (peakToPeak || 0) / 2;
-        const crest = rms > 0.05 ? peakAmp / rms : 0;
-
-        if (peakAmp >= 0.9 || (crest >= 3 && peakAmp >= 0.5)) {
-            return { kind: 'impact', label: VIB_KIND_LABEL.impact, className: 'vib-impact' };
-        }
-        if (rms < VIB_CHART.droneHigh && peakAmp < 0.7) {
-            return { kind: 'drone', label: VIB_KIND_LABEL.drone, className: 'vib-drone' };
-        }
-        return { kind: 'rough', label: VIB_KIND_LABEL.rough, className: 'vib-rough' };
-    }
-
-    // 車内スマホ向け。ISO 2631-1 より閾値を緩くし、短時間の突起で判定が跳ねないようにする
-    function comfortFromVibration(rms) {
-        const weighted = rms || 0;
-        let label = '快適';
-        let className = 'comfort-good';
-        if (weighted >= 2.4) {
-            label = '極めて不快';
-            className = 'comfort-extreme';
-        } else if (weighted >= 1.6) {
-            label = 'かなり不快';
-            className = 'comfort-bad';
-        } else if (weighted >= 1.05) {
-            label = '不快';
-            className = 'comfort-bad';
-        } else if (weighted >= 0.55) {
-            label = 'やや不快';
-            className = 'comfort-mid';
-        }
-
-        return { label, className, weighted };
-    }
 
     function heatColor(t) {
         const x = clamp(t, 0, 1);
@@ -543,8 +409,8 @@
         return heatColor(shakeMps2 / 1.6);
     }
 
-    function vibrationColor(combinedRms) {
-        return heatColor((combinedRms || 0) / 1.2);
+    function vibrationColor(continuousVibration) {
+        return heatColor((continuousVibration || 0) / 1.2);
     }
 
     function formatClock(date) {
@@ -591,10 +457,6 @@
     }
 
     function buildTrackCsv(summary, points) {
-        const fineKeys = [];
-        FINE_BANDS.forEach(function (band) {
-            fineKeys.push(band.key + '_db', band.key + '_share');
-        });
         const V = global.DriveVehicle;
         const lines = [
             '# DriveAnalytics',
@@ -602,10 +464,7 @@
             `# duration,${formatDuration(summary.elapsedMs || 0)}`,
             `# distance_km,${numCell((summary.distanceM || 0) / 1000, 3)}`,
             `# average_speed_kmh,${numCell(summary.averageSpeed || 0, 2)}`,
-            `# quietness,${summary.quietness == null ? '' : summary.quietness}`,
             `# drive_mode,${summary.driveMode || ''}`,
-            '# noise_bands,boom 20-80Hz,power 80-250Hz,struct 250-500Hz,tire 500-1600Hz,cabin 1600-3500Hz,aero 3500-8000Hz',
-            '# analysis_note,legacy shares kept for comparison; new model uses independent scores and driving/powertrain layers',
             `# points,${points.length}`
         ];
         if (V && V.summaryComments) {
@@ -624,9 +483,6 @@
             'distance_m',
             'drive_mode',
             'drive_event',
-            'rms_ms2',
-            'shake_ms2',
-            'combined_rms_ms2',
             'x_rms',
             'y_rms',
             'z_rms',
@@ -641,28 +497,11 @@
             'freq_hz',
             'comfort',
             'spl_db',
-            'quietness',
-            'engine_db',
-            'road_db',
-            'wind_db',
-            'engine_share',
-            'road_share',
-            'wind_share',
-            'legacy_engine_share',
-            'legacy_road_share',
-            'legacy_wind_share',
-            'dominant_noise',
-            'dominant_fine'
-        ].concat(fineKeys).concat([
             'voice',
             'calibrated'
-        ]).concat(vehicleKeys).join(','));
+        ].concat(vehicleKeys).join(','));
         points.forEach((point) => {
             const when = new Date(point.time);
-            const fineVals = [];
-            FINE_BANDS.forEach(function (band) {
-                fineVals.push(numCell(point[band.key + 'Db'], 2), numCell(point[band.key + 'Share'], 3));
-            });
             lines.push([
                 point.index,
                 csvCell(formatClock(when)),
@@ -675,9 +514,6 @@
                 numCell(point.distanceM, 1),
                 csvCell(point.driveMode || ''),
                 csvCell(point.driveEvent || ''),
-                numCell(point.rms, 3),
-                numCell(point.shake, 3),
-                numCell(point.combinedRms, 3),
                 numCell(point.xRms, 3),
                 numCell(point.yRms, 3),
                 numCell(point.zRms, 3),
@@ -692,22 +528,9 @@
                 numCell(point.freq, 2),
                 csvCell(point.voice ? '音声除外' : (point.comfort || '')),
                 numCell(point.dbfs, 2),
-                point.quietness == null ? '' : point.quietness,
-                numCell(point.engineDb, 2),
-                numCell(point.roadDb, 2),
-                numCell(point.windDb, 2),
-                numCell(point.engineShare, 3),
-                numCell(point.roadShare, 3),
-                numCell(point.windShare, 3),
-                numCell(point.engineShare, 3),
-                numCell(point.roadShare, 3),
-                numCell(point.windShare, 3),
-                csvCell(point.dominant || ''),
-                csvCell(point.dominantFine || '')
-            ].concat(fineVals).concat([
                 point.voice ? 1 : 0,
                 point.calibrated ? 1 : 0
-            ]).concat(V && V.serializePoint ? V.serializePoint(point) : []).join(','));
+            ].concat(V && V.serializePoint ? V.serializePoint(point) : []).join(','));
         });
         return lines.join('\r\n');
     }
@@ -722,29 +545,20 @@
         longitudinalAccel,
         corneringAccel,
         dbfsFromTimeDomain,
-        FINE_BANDS,
-        NOISE_BANDS,
-        NOISE_DOMINANT_LABEL,
         DRIVE_MODES,
         DRIVE_EVENT_LABEL,
         bandBinRange,
         bandIntegratedPower,
         bandPower,
-        audioBands,
-        splitOverallDbfs,
-        bandsFromFinePowers,
+        peakBinInRange,
+        avgDbInRange,
         axisStats,
         classifyDriveEvent,
         pickDriveEvent,
         speechLikelihood,
         quietnessScore,
         dominantFrequency,
-        combineVibrationRms,
         VIB_CHART,
-        VIB_KIND_LABEL,
-        VIB_KIND_COLOR,
-        classifyVibration,
-        comfortFromVibration,
         heatColor,
         noiseColor,
         lateralColor,

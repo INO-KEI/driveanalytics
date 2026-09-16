@@ -312,6 +312,23 @@ button:disabled {
     margin-left: auto;
 }
 
+/* 走行状態（VEL）と乗り心地評価（VIB）の表示を同じ見た目・同じ大きさの箱に揃える */
+.graph-hud .hud-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 5.6em;
+    padding: 0 0.15rem;
+    margin-left: 0.35rem;
+    border: 1px solid var(--muted);
+    font-size: 0.8rem;
+    line-height: 1.3;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .graph-hud .hud-src {
     font-size: 0.72rem;
     color: var(--orange);
@@ -324,7 +341,6 @@ button:disabled {
 }
 
 .comfort-chip {
-    padding: 0 0.35rem;
     border: 1px solid var(--muted);
     color: var(--muted);
 }
@@ -342,12 +358,15 @@ button:disabled {
     border-color: var(--red);
 }
 
-#vibration-source.vib-drone { color: #ffd200; }
-#vibration-source.vib-rough { color: var(--orange); }
-#vibration-source.vib-impact { color: var(--red); font-weight: 700; }
-
 #hud-motion { color: #ffd200; }
 #hud-noise { color: var(--cyan); }
+#hud-rpm {
+    color: var(--cyan);
+    border-color: var(--cyan);
+}
+#hud-rpm.rpm-low-confidence {
+    opacity: 0.55;
+}
 
 .graph-panel canvas {
     flex: 1;
@@ -463,57 +482,18 @@ button:disabled {
     font-weight: 700;
 }
 
-.band { margin-top: 0.4rem; }
-.band-label { font-size: 0.72rem; margin-bottom: 0.12rem; }
 .band-track {
     height: 6px;
     background: #1b1e18;
     overflow: hidden;
 }
-.band-mix { margin-top: 0.45rem; }
-.band-mix-track {
-    display: flex;
-    height: 12px;
-    background: #1b1e18;
-    overflow: hidden;
-}
-.band-mix-track.fine {
-    height: 8px;
-    margin-top: 0.45rem;
-}
-.band-mix-legend {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 0.35rem;
-    margin-top: 0.35rem;
-}
-.band-mix-legend.fine {
-    grid-template-columns: repeat(6, 1fr);
-    gap: 0.2rem;
-}
-.band-mix-legend .band-label {
-    margin-bottom: 0;
-    line-height: 1.3;
-    white-space: pre-line;
-    min-width: 0;
-}
 .band-fill { height: 100%; width: 0%; }
 .band-fill.engine { background: #d47bff; }
 .band-fill.road { background: var(--orange); }
 .band-fill.wind { background: #ffe14d; }
-.band-fill.boom { background: #8a3dff; }
-.band-fill.power { background: #d47bff; }
-.band-fill.struct { background: #c45a12; }
-.band-fill.tire { background: var(--orange); }
-.band-fill.cabin { background: #d4c24d; }
-.band-fill.aero { background: #ffe14d; }
 #hud-event {
     color: #7aa4ff;
-    font-size: 0.72rem;
-}
-#noise-dominant {
-    font-weight: 700;
-    color: var(--orange);
+    border-color: #7aa4ff;
 }
 
 .track-table-wrap {
@@ -617,6 +597,21 @@ button:disabled {
     margin-top: 0.5rem;
 }
 .settings-actions button { margin: 0; }
+.settings-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.4rem;
+}
+.settings-row label { font-size: 0.8rem; color: var(--text); }
+select {
+    background: #1a1208;
+    color: var(--text);
+    border: 1px solid var(--orange-dim);
+    padding: 0.2rem 0.4rem;
+    font-family: inherit;
+    font-size: 0.8rem;
+}
 
 @media (min-width: 900px) {
     #cockpit { flex-direction: row; }
@@ -756,16 +751,6 @@ button:disabled {
     align-items: center;
     gap: 0.35rem;
     margin-bottom: 0.28rem;
-    font-size: 0.72rem;
-}
-
-.legacy-noise {
-    margin-top: 0.6rem;
-}
-
-.legacy-noise summary {
-    cursor: pointer;
-    color: var(--muted);
     font-size: 0.72rem;
 }
 

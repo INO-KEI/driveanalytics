@@ -19,6 +19,7 @@ class UIManager {
         this.gpsQualityElement = document.getElementById('gps-quality');
         this.driveEventElement = document.getElementById('drive-event');
         this.engineStateElement = document.getElementById('engine-state');
+        this.engineRpmElement = document.getElementById('engine-rpm');
         this.driveModeElement = document.getElementById('drive-mode');
         this.longAccelElement = document.getElementById('long-accel');
         this.avgSpeedElement = document.getElementById('average-speed');
@@ -28,7 +29,6 @@ class UIManager {
         this.vibrationXyzElement = document.getElementById('vibration-xyz');
         this.vibrationLevelElement = document.getElementById('vibration-level');
         this.vibrationCombinedElement = document.getElementById('vibration-combined');
-        this.vibrationSourceElement = document.getElementById('vibration-source');
         this.vibrationFreqElement = document.getElementById('vibration-freq');
         this.comfortElement = document.getElementById('comfort');
         this.lateralElement = document.getElementById('lateral-g');
@@ -36,18 +36,6 @@ class UIManager {
         this.rideSplitElement = document.getElementById('ride-split');
         this.noiseLevelElement = document.getElementById('noise-level');
         this.quietnessElement = document.getElementById('quietness');
-        this.engineBar = document.getElementById('band-engine');
-        this.roadBar = document.getElementById('band-road');
-        this.windBar = document.getElementById('band-wind');
-        this.engineLabel = document.getElementById('band-engine-label');
-        this.roadLabel = document.getElementById('band-road-label');
-        this.windLabel = document.getElementById('band-wind-label');
-        this.fineBars = {};
-        this.fineLabels = {};
-        this.A.FINE_BANDS.forEach((band) => {
-            this.fineBars[band.key] = document.getElementById('band-' + band.key);
-            this.fineLabels[band.key] = document.getElementById('band-' + band.key + '-label');
-        });
         this.tableBody = document.getElementById('track-table-body');
         this.tableScroll = document.querySelector('.table-scroll');
         this.tableEmpty = document.getElementById('track-empty');
@@ -58,7 +46,6 @@ class UIManager {
         this.colorVibButton = document.getElementById('colorVib');
         this.noiseHint = document.getElementById('noise-hint');
         this.voiceFlag = document.getElementById('voice-flag');
-        this.noiseDominant = document.getElementById('noise-dominant');
         this.noiseIndependent = document.getElementById('noise-independent');
         this.evLikelihoodElement = document.getElementById('ev-likelihood');
         this.scoreQuietness = document.getElementById('score-quietness');
@@ -92,6 +79,7 @@ class UIManager {
         this.calSave = document.getElementById('calSave');
         this.calClear = document.getElementById('calClear');
         this.pendingCalPeak = null;
+        this.cylinderSelect = document.getElementById('cylinderSelect');
         this.charts = new NervCharts();
         this.statusTimer = null;
 
@@ -102,6 +90,7 @@ class UIManager {
         this.updateNoiseHint();
         this.observeCockpit();
         this.syncModeChips(this.sensorManager.getDriveMode());
+        this.syncCylinderSelect();
         if (this.debugPanel && this.debugMode) {
             this.debugPanel.hidden = false;
         }
@@ -233,6 +222,15 @@ class UIManager {
         this.calStart.addEventListener('click', () => this.runCalibration());
         this.calSave.addEventListener('click', () => this.savePendingCalibration());
         this.calClear.addEventListener('click', () => this.clearCalibration());
+        if (this.cylinderSelect) {
+            this.cylinderSelect.addEventListener('change', () => {
+                const n = this.cylinderSelect.value ? Number(this.cylinderSelect.value) : null;
+                this.sensorManager.setEngineCylinders(n);
+                if (this.engineRpmElement) {
+                    this.engineRpmElement.hidden = n == null;
+                }
+            });
+        }
         this.csvSaveButton.addEventListener('click', () => this.downloadCsv());
         this.csvMailButton.addEventListener('click', () => this.shareCsv());
 
@@ -483,6 +481,7 @@ class UIManager {
             this.engineStateElement.textContent =
                 `パワートレーン: ${this.engineStateLabel(data.vehicle.engineState)} / p=${(data.vehicle.engineProbability || 0).toFixed(2)}`;
         }
+        this.renderEngineRpm(data.vehicle);
         if (this.driveModeElement && data.driveMode) {
             this.driveModeElement.textContent = `モード: ${this.modeLabel(data.driveMode)}`;
         }
@@ -553,39 +552,36 @@ class UIManager {
             return;
         }
 
+        const vehicle = this.sensorManager.vehicle ? this.sensorManager.vehicle.getSnapshot() : null;
+        const continuousVibration = vehicle ? vehicle.continuousVibration : 0;
+        const shakeScore = vehicle ? vehicle.shakeScore : (data.shake || 0);
+        const verticalMotion = vehicle ? vehicle.verticalMotion : (data.rms || 0);
+
         if (this.vibrationCombinedElement) {
             this.vibrationCombinedElement.textContent =
-                `合成 RMS: ${(data.combinedRms || 0).toFixed(2)} m/s²（上下と横揺れの二乗和平方根）`;
+                `合成 RMS: ${continuousVibration.toFixed(2)} m/s²（XYZ合成、直近1.4秒）`;
             this.vibrationCombinedElement.className = data.comfortClass || '';
         }
-        if (this.vibrationSourceElement) {
-            this.vibrationSourceElement.textContent = `要因: ${data.vibLabel || '--'}`;
-            this.vibrationSourceElement.className = data.vibClass || '';
-        }
         this.vibrationLevelElement.textContent =
-            `上下 RMS: ${(data.rms || 0).toFixed(2)} m/s²（振れ幅 ${(data.peak || 0).toFixed(2)}）`;
+            `上下 RMS: ${verticalMotion.toFixed(2)} m/s²（振れ幅 ${(data.peak || 0).toFixed(2)}）`;
         this.vibrationLevelElement.className = data.comfortClass || '';
         this.vibrationFreqElement.textContent = `卓越周波数: ${(data.freq || 0).toFixed(1)} Hz`;
         this.comfortElement.textContent = `判定: ${data.comfort}`;
         this.comfortElement.className = data.comfortClass || '';
         this.lateralElement.textContent = `横G（コーナリング）: ${Math.abs(data.lateralG || 0).toFixed(2)} G`;
-        this.shakeElement.textContent = `Shake: ${(data.shake || 0).toFixed(2)} m/s²`;
-        const vehicle = this.sensorManager.vehicle ? this.sensorManager.vehicle.getSnapshot() : null;
+        this.shakeElement.textContent = `Shake: ${shakeScore.toFixed(2)} m/s²`;
         if (this.rideSplitElement && vehicle) {
             this.rideSplitElement.textContent =
                 `Ride: 振動 ${vehicle.rideVibrationScore.toFixed(0)} / Shake ${vehicle.rideShakeScore.toFixed(0)} / Impact ${vehicle.rideImpactScore.toFixed(0)} / 安定 ${vehicle.rideStabilityScore.toFixed(0)}`;
         }
         this.pushChart({
-            rms: data.rms || 0,
-            shake: data.shake || 0,
-            combinedRms: vehicle ? vehicle.continuousVibration : (data.combinedRms || 0),
+            rms: verticalMotion,
+            shake: shakeScore,
+            continuousVibration: continuousVibration,
             peak: data.peak || 0,
             freq: data.freq || 0,
             comfort: data.comfort || '',
             comfortClass: data.comfortClass || '',
-            vibKind: data.vibKind || 'none',
-            vibLabel: data.vibLabel || '',
-            vibClass: data.vibClass || '',
             impactScore: vehicle ? vehicle.impactScore : 0,
             impactEvent: vehicle ? vehicle.impactEvent : false
         });
@@ -616,91 +612,21 @@ class UIManager {
         }
 
         this.setIndependentNoise(vehicle);
-        this.setBandMix(data);
+        this.renderEngineRpm(vehicle);
         this.pushChart({
             dbfs: data.dbfs,
             quietness: vehicle && vehicle.quietnessScore != null ? vehicle.quietnessScore : data.quietness,
             voice: data.voiceDetected,
             calibrated: data.calibrated,
-            engineDb: data.engineDb,
-            roadDb: data.roadDb,
-            windDb: data.windDb,
-            engineShare: data.engineShare,
-            roadShare: data.roadShare,
-            windShare: data.windShare,
             engineNoiseScore: vehicle ? vehicle.engineNoiseScore : 0,
             roadNoiseScore: vehicle ? vehicle.roadNoiseScore : 0,
             windNoiseScore: vehicle ? vehicle.windNoiseScore : 0,
-            dominant: data.dominant,
-            engineState: vehicle ? vehicle.engineState : 'UNKNOWN'
+            engineState: vehicle ? vehicle.engineState : 'UNKNOWN',
+            engineRpm: vehicle ? vehicle.engineRpm : null,
+            engineRpmConfidence: vehicle ? vehicle.engineRpmConfidence : 0
         });
         this.updateScoreCards({ vehicle: vehicle });
         this.updateDebug(vehicle);
-    }
-
-    bandLabelText(key, db, share, calibrated) {
-        const band = this.A.NOISE_BANDS[key];
-        const value = typeof db === 'number' ? db : -100;
-        const pct = Math.round((share || 0) * 100);
-        const unit = calibrated ? 'dB' : 'dBFS';
-        return `${band.label} ${pct}%\n${value.toFixed(1)} ${unit}\n${this.formatHz(band.low)}–${this.formatHz(band.high)}`;
-    }
-
-    formatHz(hz) {
-        if (hz >= 1000) {
-            const k = hz / 1000;
-            return `${Number.isInteger(k) ? k : k}k`;
-        }
-        return String(hz);
-    }
-
-    setBandMix(data) {
-        const engineShare = data.engineShare || 0;
-        const roadShare = data.roadShare || 0;
-        const windShare = data.windShare || 0;
-        if (this.engineBar) {
-            this.engineBar.style.width = `${(engineShare * 100).toFixed(1)}%`;
-        }
-        if (this.roadBar) {
-            this.roadBar.style.width = `${(roadShare * 100).toFixed(1)}%`;
-        }
-        if (this.windBar) {
-            this.windBar.style.width = `${(windShare * 100).toFixed(1)}%`;
-        }
-        if (this.engineLabel) {
-            this.engineLabel.textContent = this.bandLabelText('engine', data.engineDb, engineShare, data.calibrated);
-        }
-        if (this.roadLabel) {
-            this.roadLabel.textContent = this.bandLabelText('road', data.roadDb, roadShare, data.calibrated);
-        }
-        if (this.windLabel) {
-            this.windLabel.textContent = this.bandLabelText('wind', data.windDb, windShare, data.calibrated);
-        }
-        if (this.noiseDominant) {
-            const group = this.A.NOISE_DOMINANT_LABEL[data.dominant] || '--';
-            const fine = this.A.NOISE_DOMINANT_LABEL[data.dominantFine] || '';
-            this.noiseDominant.textContent = fine && fine !== group && data.dominantFine && data.dominantFine !== 'none'
-                ? `主因: ${group}（${fine}）`
-                : `主因: ${group}`;
-        }
-        this.A.FINE_BANDS.forEach((band) => {
-            const share = data[band.key + 'Share'] || 0;
-            const bar = this.fineBars[band.key];
-            const label = this.fineLabels[band.key];
-            if (bar) {
-                bar.style.width = `${(share * 100).toFixed(1)}%`;
-            }
-            if (label) {
-                label.textContent = this.fineLabelText(band, data[band.key + 'Db'], share, data.calibrated);
-            }
-        });
-    }
-
-    fineLabelText(band, db, share, calibrated) {
-        const value = typeof db === 'number' ? db : -100;
-        const pct = Math.round((share || 0) * 100);
-        const unit = calibrated ? 'dB' : 'dBFS';
-        return `${band.label} ${pct}%\n${value.toFixed(1)} ${unit}`;
     }
 
     modeLabel(id) {
@@ -863,6 +789,28 @@ class UIManager {
         }
     }
 
+    syncCylinderSelect() {
+        const n = this.sensorManager.getEngineCylinders();
+        if (this.cylinderSelect) {
+            this.cylinderSelect.value = n == null ? '' : String(n);
+        }
+        if (this.engineRpmElement) {
+            this.engineRpmElement.hidden = n == null;
+        }
+    }
+
+    renderEngineRpm(vehicle) {
+        if (!this.engineRpmElement || this.sensorManager.getEngineCylinders() == null) {
+            return;
+        }
+        if (!vehicle || vehicle.engineRpm == null) {
+            this.engineRpmElement.textContent = '推定回転数: -- RPM（信頼度 --%）';
+            return;
+        }
+        const confidence = Math.round((vehicle.engineRpmConfidence || 0) * 100);
+        this.engineRpmElement.textContent = `推定回転数: 約${vehicle.engineRpm} RPM（信頼度 ${confidence}%）`;
+    }
+
     addTrackPoint(point) {
         this.trackPoints.push(point);
         this.polyline.addLatLng([point.latitude, point.longitude]);
@@ -875,6 +823,7 @@ class UIManager {
             this.engineStateElement.textContent =
                 `パワートレーン: ${this.engineStateLabel(point.engineState)} / p=${Number(point.engineProbability || 0).toFixed(2)}`;
         }
+        this.renderEngineRpm(point);
         this.setIndependentNoise(point);
         this.updateDebug(point);
 
@@ -888,7 +837,7 @@ class UIManager {
             return true;
         }
         const loud = !point.voice && (point.calibrated ? point.dbfs >= -12 : point.dbfs >= -18);
-        if (point.vibKind === 'impact' || Math.abs(point.lateralG) >= 0.2 || point.shake >= 0.45 || loud) {
+        if (point.impactEvent || Math.abs(point.lateralG) >= 0.2 || (point.shakeScore || 0) >= 0.45 || loud) {
             return true;
         }
         const interval = this.trackPoints.length > 7200 ? 15 : this.trackPoints.length > 2400 ? 8 : 3;
@@ -912,7 +861,7 @@ class UIManager {
 
     spotColor(point) {
         return this.colorMode === 'vib'
-            ? (point.vibKind === 'impact' ? '#ff3b30' : this.A.vibrationColor(point.combinedRms))
+            ? (point.impactEvent ? '#ff3b30' : this.A.vibrationColor(point.continuousVibration))
             : this.A.noiseColor(point.dbfs, point.calibrated);
     }
 
@@ -923,11 +872,10 @@ class UIManager {
                 速度 ${point.speed.toFixed(1)} km/h<br>
                 モード ${this.modeLabel(point.driveMode)} / ${this.eventLabel(point.drivingState || point.driveEvent)}<br>
                 GPS ${point.gpsValid ? '有効' : '除外'} / 速度 ${Number(point.filteredSpeed != null ? point.filteredSpeed : point.speed).toFixed(1)} km/h<br>
-                継続振動 ${Number(point.continuousVibration || point.combinedRms || 0).toFixed(2)} / Shake ${Number(point.shakeScore != null ? point.shakeScore : point.shake).toFixed(2)} / Impact ${Number(point.impactScore || 0).toFixed(0)}<br>
+                継続振動 ${Number(point.continuousVibration || 0).toFixed(2)} / Shake ${Number(point.shakeScore || 0).toFixed(2)} / Impact ${Number(point.impactScore || 0).toFixed(0)}<br>
                 Engine p ${Number(point.engineProbability || 0).toFixed(2)} / ${this.engineStateLabel(point.engineState)}<br>
                 相対音量 ${point.dbfs.toFixed(1)} ${this.noiseUnit(point.calibrated)}<br>
-                Q ${point.quietnessScore == null ? '--' : point.quietnessScore} / Ride ${point.rideComfortScore == null ? '--' : point.rideComfortScore} / PT ${point.powertrainSmoothnessScore == null ? '--' : point.powertrainSmoothnessScore}<br>
-                Legacy エンジン ${Math.round((point.engineShare || 0) * 100)}% / ロード ${Math.round((point.roadShare || 0) * 100)}% / 風 ${Math.round((point.windShare || 0) * 100)}%
+                Q ${point.quietnessScore == null ? '--' : point.quietnessScore} / Ride ${point.rideComfortScore == null ? '--' : point.rideComfortScore} / PT ${point.powertrainSmoothnessScore == null ? '--' : point.powertrainSmoothnessScore}
             </div>
         `;
     }
@@ -944,8 +892,8 @@ class UIManager {
     appendTableRow(point) {
         const tr = document.createElement('tr');
         tr.dataset.index = String(point.index);
-        const shake = point.shakeScore != null ? point.shakeScore : point.shake;
-        const vib = point.continuousVibration != null ? point.continuousVibration : point.combinedRms;
+        const shake = point.shakeScore || 0;
+        const vib = point.continuousVibration || 0;
         const noiseTone = this.A.noiseColor(point.dbfs, point.calibrated);
         const shakeTone = this.A.lateralColor(shake);
         tr.innerHTML = `

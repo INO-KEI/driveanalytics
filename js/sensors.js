@@ -26,14 +26,8 @@ class SensorManager {
             rms: 0,
             peak: 0,
             freq: 0,
-            comfort: '計測待機',
-            comfortClass: '',
             lateralG: 0,
             shake: 0,
-            combinedRms: 0,
-            vibKind: 'none',
-            vibLabel: '',
-            vibClass: '',
             xRms: 0,
             yRms: 0,
             zRms: 0,
@@ -55,24 +49,8 @@ class SensorManager {
             dbfsRaw: -100,
             calibrated: false,
             quietness: null,
-            engineDb: -100,
-            roadDb: -100,
-            windDb: -100,
-            engineDbRaw: -100,
-            roadDbRaw: -100,
-            windDbRaw: -100,
-            engineShare: 0,
-            roadShare: 0,
-            windShare: 0,
-            dominant: 'none',
-            dominantFine: 'none',
             voiceDetected: false
         };
-        this.A.FINE_BANDS.forEach((band) => {
-            this.noiseData[band.key + 'Db'] = -100;
-            this.noiseData[band.key + 'DbRaw'] = -100;
-            this.noiseData[band.key + 'Share'] = 0;
-        });
 
         this.locationWatchId = null;
         this.audioContext = null;
@@ -89,7 +67,7 @@ class SensorManager {
         this.calibSavedAt = null;
         this.speechMidHistory = [];
         this.voiceHoldUntil = 0;
-        this.lastCleanRaw = null;
+        this.lastCleanDbfs = null;
 
         this.boundMotionHandler = this.handleMotionEvent.bind(this);
         this.boundLocationUpdate = this.handleLocationUpdate.bind(this);
@@ -99,13 +77,10 @@ class SensorManager {
         this.gravity = { x: 0, y: 0, z: 9.8 };
         this.gravityReady = false;
         this.vertSamples = [];
-        this.horizSamples = [];
         this.xSamples = [];
         this.ySamples = [];
         this.zSamples = [];
         this.motionTimes = [];
-        this.comfortRms = [];
-        this.comfortTimes = [];
         this.speedTrace = [];
         this.eventTrace = [];
         this.driveMode = 'unset';
@@ -125,6 +100,7 @@ class SensorManager {
         this.session = this.createEmptySession();
         this.dataListeners = [];
         this.loadCalibration();
+        this.loadEngineCylinders();
         this.bindLifecycle();
     }
 
@@ -529,7 +505,6 @@ class SensorManager {
 
         const now = performance.now();
         this.vertSamples.push(vertical);
-        this.horizSamples.push(horizontal);
         this.xSamples.push(linX);
         this.ySamples.push(linY);
         this.zSamples.push(linZ);
@@ -537,7 +512,6 @@ class SensorManager {
         while (this.motionTimes.length && now - this.motionTimes[0] > 1200) {
             this.motionTimes.shift();
             this.vertSamples.shift();
-            this.horizSamples.shift();
             this.xSamples.shift();
             this.ySamples.shift();
             this.zSamples.shift();
@@ -550,23 +524,25 @@ class SensorManager {
         }
 
         const vib = this.A.dominantFrequency(this.vertSamples, sampleRate);
-        const shakeRms = this.rms(this.horizSamples);
-        const combinedRms = this.A.combineVibrationRms(vib.rms, shakeRms);
-        const source = this.A.classifyVibration(vib.rms, vib.peakToPeak);
         const xStat = this.A.axisStats(this.xSamples);
         const yStat = this.A.axisStats(this.ySamples);
         const zStat = this.A.axisStats(this.zSamples);
 
-        this.comfortRms.push(combinedRms);
-        this.comfortTimes.push(now);
-        while (this.comfortTimes.length && now - this.comfortTimes[0] > 12000) {
-            this.comfortTimes.shift();
-            this.comfortRms.shift();
+        if (this.vehicle) {
+            this.vehicle.ingestMotion({
+                t: now,
+                linX: linX,
+                linY: linY,
+                linZ: linZ,
+                vertical: vertical,
+                horizontal: horizontal,
+                vibFreqHz: vib.freq
+            });
         }
-        const comfortSpan = this.comfortTimes.length ? now - this.comfortTimes[0] : 0;
-        const comfort = comfortSpan < 3000
-            ? { label: '計測中', className: '' }
-            : this.A.comfortFromVibration(this.mean(this.comfortRms));
+        // Shakeはvehicle.js側（直近1.4秒のRMS）を唯一の情報源にする。ここで別窓のRMSを取り直さない。
+        const vehicleSnapshot = this.vehicle ? this.vehicle.getSnapshot() : null;
+        const comfort = this.V.comfortLabelFromScore(vehicleSnapshot ? vehicleSnapshot.rideComfortScore : null);
+        const shakeScore = vehicleSnapshot ? vehicleSnapshot.shakeScore : 0;
 
         this.accelerationData = {
             x: linX,
@@ -580,11 +556,7 @@ class SensorManager {
             comfort: comfort.label,
             comfortClass: comfort.className,
             lateralG: this.accelerationData.lateralG,
-            shake: shakeRms,
-            combinedRms: combinedRms,
-            vibKind: source.kind,
-            vibLabel: source.label,
-            vibClass: source.className,
+            shake: shakeScore,
             xRms: xStat.rms,
             yRms: yStat.rms,
             zRms: zStat.rms,
@@ -597,44 +569,10 @@ class SensorManager {
             unavailable: false
         };
 
-        if (this.vehicle) {
-            this.vehicle.ingestMotion({
-                t: now,
-                linX: linX,
-                linY: linY,
-                linZ: linZ,
-                vertical: vertical,
-                horizontal: horizontal,
-                shake: shakeRms
-            });
-        }
-
         if (now - this.lastUiNotify.acceleration > 200) {
             this.lastUiNotify.acceleration = now;
             this.notifyListeners('acceleration', Object.assign({}, this.accelerationData));
         }
-    }
-
-    rms(values) {
-        if (!values.length) {
-            return 0;
-        }
-        let sum = 0;
-        for (let i = 0; i < values.length; i++) {
-            sum += values[i] * values[i];
-        }
-        return Math.sqrt(sum / values.length);
-    }
-
-    mean(values) {
-        if (!values.length) {
-            return 0;
-        }
-        let sum = 0;
-        for (let i = 0; i < values.length; i++) {
-            sum += values[i];
-        }
-        return sum / values.length;
     }
 
     stopAccelerationTracking() {
@@ -742,12 +680,6 @@ class SensorManager {
         this.analyzer.getFloatTimeDomainData(this.timeBuffer);
 
         const dbfs = this.A.dbfsFromTimeDomain(this.timeBuffer);
-        const bands = this.A.audioBands(
-            this.freqBuffer,
-            this.audioContext.sampleRate,
-            this.analyzer.fftSize,
-            dbfs
-        );
         const speech = this.A.speechLikelihood(
             this.freqBuffer,
             this.audioContext.sampleRate,
@@ -766,16 +698,14 @@ class SensorManager {
         const voiceDetected = now < this.voiceHoldUntil;
 
         if (!voiceDetected) {
-            this.lastCleanRaw = Object.assign({ dbfs: dbfs }, bands);
+            this.lastCleanDbfs = dbfs;
         }
 
-        const source = (voiceDetected && this.lastCleanRaw)
-            ? this.lastCleanRaw
-            : Object.assign({ dbfs: dbfs }, bands);
+        const effectiveDbfs = (voiceDetected && this.lastCleanDbfs != null)
+            ? this.lastCleanDbfs
+            : dbfs;
 
-        this.noiseData = this.packNoise(source.dbfs, Object.assign({}, source, {
-            voiceDetected: voiceDetected
-        }));
+        this.noiseData = this.packNoise(effectiveDbfs, { voiceDetected: voiceDetected });
 
         if (this.vehicle) {
             const bandDb = this.V.audioLayerBands(
@@ -785,9 +715,12 @@ class SensorManager {
             );
             this.vehicle.ingestAudio({
                 t: now,
-                dbfs: source.dbfs,
+                dbfs: effectiveDbfs,
                 voice: voiceDetected,
-                bandDb: bandDb
+                bandDb: bandDb,
+                freqDb: this.freqBuffer,
+                sampleRate: this.audioContext.sampleRate,
+                fftSize: this.analyzer.fftSize
             });
         }
 
@@ -883,25 +816,13 @@ class SensorManager {
             lateralG: this.accelerationData.lateralG || 0,
             shake: this.accelerationData.shake || 0,
             rms: this.accelerationData.rms || 0,
-            combinedRms: this.accelerationData.combinedRms || 0,
             freq: this.accelerationData.freq || 0,
             comfort: this.accelerationData.comfort,
             comfortClass: this.accelerationData.comfortClass,
             peak: this.accelerationData.peak || 0,
-            vibKind: this.accelerationData.vibKind || 'none',
-            vibLabel: this.accelerationData.vibLabel || '',
             dbfs: this.noiseData.dbfs,
             dbfsRaw: this.noiseData.dbfsRaw,
             calibrated: this.isCalibrated(),
-            quietness: this.getQuietness(),
-            engineDb: this.noiseData.engineDb,
-            roadDb: this.noiseData.roadDb,
-            windDb: this.noiseData.windDb,
-            engineShare: this.noiseData.engineShare,
-            roadShare: this.noiseData.roadShare,
-            windShare: this.noiseData.windShare,
-            dominant: this.noiseData.dominant,
-            dominantFine: this.noiseData.dominantFine,
             driveMode: this.driveMode,
             driveEvent: sampleEvent,
             xRms: this.accelerationData.xRms || 0,
@@ -919,10 +840,6 @@ class SensorManager {
             elapsedMs: Date.now() - this.session.startedAt
         };
         this.lastSampleAt = point.time;
-        this.A.FINE_BANDS.forEach((band) => {
-            point[band.key + 'Db'] = this.noiseData[band.key + 'Db'];
-            point[band.key + 'Share'] = this.noiseData[band.key + 'Share'];
-        });
         if (this.vehicle) {
             Object.assign(point, this.vehicle.buildSample());
         }
@@ -1007,13 +924,10 @@ class SensorManager {
         this.session = this.createEmptySession();
         this.session.startedAt = Date.now();
         this.vertSamples = [];
-        this.horizSamples = [];
         this.xSamples = [];
         this.ySamples = [];
         this.zSamples = [];
         this.motionTimes = [];
-        this.comfortRms = [];
-        this.comfortTimes = [];
         this.speedTrace = [];
         this.eventTrace = [];
         this.driveEvent = 'none';
@@ -1027,7 +941,7 @@ class SensorManager {
         this.lastSampleAt = 0;
         this.speechMidHistory = [];
         this.voiceHoldUntil = 0;
-        this.lastCleanRaw = null;
+        this.lastCleanDbfs = null;
         this.vehicleSummary = null;
         this.locationData.rawSpeed = 0;
         this.locationData.filteredSpeed = 0;
@@ -1113,11 +1027,7 @@ class SensorManager {
             }
 
             const raw = -40 + Math.abs(corner) * 10 + (bump > 1 ? 8 : 0) + (lowSpeed ? 6 : 0);
-            const engineP = (cycle < 15 ? 0.55 : 0.18) + (launchRise ? 0.28 : 0);
-            const roadP = 0.30 + Math.abs(corner) * 0.22 + (bump > 1 ? 0.2 : 0) + Math.max(0, speedMps - 8) * 0.02;
-            const windP = 0.08 + Math.max(0, speedMps - 10) * 0.04 + Math.abs(Math.sin(t * 1.7)) * 0.05;
-            const bands = this.A.splitOverallDbfs(raw, engineP, roadP, windP);
-            this.noiseData = this.packNoise(raw, bands);
+            this.noiseData = this.packNoise(raw, {});
             if (this.vehicle) {
                 const lf = cycle < 15 ? -26 : (launchRise ? -34 + (cycle - 15) * 0.55 : -38);
                 const power = cycle < 15 ? -28 : (launchRise ? -36 + (cycle - 15) * 0.4 : -40);
@@ -1223,42 +1133,13 @@ class SensorManager {
 
     packNoise(rawDbfs, extra) {
         extra = extra || {};
-        const calibrated = this.isCalibrated();
-        const engineRaw = extra.engineDb != null ? extra.engineDb : this.noiseData.engineDbRaw;
-        const roadRaw = extra.roadDb != null ? extra.roadDb : this.noiseData.roadDbRaw;
-        const windRaw = extra.windDb != null ? extra.windDb : this.noiseData.windDbRaw;
-        const engineShare = extra.engineShare != null ? extra.engineShare : this.noiseData.engineShare;
-        const roadShare = extra.roadShare != null ? extra.roadShare : this.noiseData.roadShare;
-        const windShare = extra.windShare != null ? extra.windShare : this.noiseData.windShare;
-        const packed = {
+        return {
             dbfsRaw: rawDbfs,
             dbfs: this.applyCal(rawDbfs),
-            calibrated: calibrated,
+            calibrated: this.isCalibrated(),
             quietness: this.getQuietness(),
-            engineDbRaw: engineRaw,
-            roadDbRaw: roadRaw,
-            windDbRaw: windRaw,
-            engineDb: this.applyCal(engineRaw),
-            roadDb: this.applyCal(roadRaw),
-            windDb: this.applyCal(windRaw),
-            engineShare: engineShare || 0,
-            roadShare: roadShare || 0,
-            windShare: windShare || 0,
-            dominant: extra.dominant || this.noiseData.dominant || 'none',
-            dominantFine: extra.dominantFine || this.noiseData.dominantFine || 'none',
             voiceDetected: Boolean(extra.voiceDetected)
         };
-        this.A.FINE_BANDS.forEach((band) => {
-            const raw = extra[band.key + 'Db'] != null
-                ? extra[band.key + 'Db']
-                : this.noiseData[band.key + 'DbRaw'];
-            packed[band.key + 'DbRaw'] = raw;
-            packed[band.key + 'Db'] = this.applyCal(raw);
-            packed[band.key + 'Share'] = extra[band.key + 'Share'] != null
-                ? extra[band.key + 'Share']
-                : (this.noiseData[band.key + 'Share'] || 0);
-        });
-        return packed;
     }
 
     isCalibrated() {
@@ -1310,6 +1191,36 @@ class SensorManager {
         this.calibPeak = null;
         this.calibSavedAt = null;
         localStorage.removeItem('driveanalytics.noiseCal.v1');
+    }
+
+    loadEngineCylinders() {
+        try {
+            const raw = localStorage.getItem('driveanalytics.engineCylinders');
+            const n = raw ? Number(raw) : null;
+            if (this.vehicle) {
+                this.vehicle.setCylinders(n);
+            }
+        } catch (error) {
+            if (this.vehicle) {
+                this.vehicle.setCylinders(null);
+            }
+        }
+    }
+
+    setEngineCylinders(n) {
+        const value = typeof n === 'number' && isFinite(n) && n > 0 ? n : null;
+        if (this.vehicle) {
+            this.vehicle.setCylinders(value);
+        }
+        if (value == null) {
+            localStorage.removeItem('driveanalytics.engineCylinders');
+        } else {
+            localStorage.setItem('driveanalytics.engineCylinders', String(value));
+        }
+    }
+
+    getEngineCylinders() {
+        return this.vehicle ? this.vehicle.cylinders : null;
     }
 
     cancelCalibration() {

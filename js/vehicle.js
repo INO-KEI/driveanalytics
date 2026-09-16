@@ -41,7 +41,14 @@
         persistNeedSec: 2.2,
         historySec: 12,
         lowSpeedMinKmh: 10,
-        lowSpeedMaxKmh: 20
+        lowSpeedMaxKmh: 20,
+        rpmMinRpm: 450,
+        rpmMaxRpm: 7000,
+        rpmSmoothAlpha: 0.35,
+        rpmLockMs: 900,
+        rpmLoseLockMs: 1500,
+        rpmMinConfidence: 0.25,
+        rpmJumpToleranceRatio: 0.4
     };
 
     function mergeStoredConfig(base) {
@@ -173,6 +180,8 @@
         'high_frequency_noise',
         'impact_event_id',
         'engine_transition_id',
+        'engine_rpm',
+        'engine_rpm_confidence',
         'engine_debug'
     ];
 
@@ -278,6 +287,26 @@
             return 'Poor';
         }
         return 'Fair';
+    }
+
+    // Ride Comfortスコア（速度帯を考慮した0-100）から表示用の快適判定ラベルを作る
+    function comfortLabelFromScore(score) {
+        if (score == null) {
+            return { label: '計測中', className: '' };
+        }
+        if (score >= 90) {
+            return { label: '快適', className: 'comfort-good' };
+        }
+        if (score >= 75) {
+            return { label: 'やや不快', className: 'comfort-mid' };
+        }
+        if (score >= 55) {
+            return { label: '不快', className: 'comfort-bad' };
+        }
+        if (score >= 35) {
+            return { label: 'かなり不快', className: 'comfort-bad' };
+        }
+        return { label: '極めて不快', className: 'comfort-extreme' };
     }
 
     function freqLabel(count) {
@@ -403,6 +432,8 @@
                 vibrationRise: 0,
                 persistence: 0
             },
+            engineRpm: null,
+            engineRpmConfidence: 0,
             soundLabel: 'Relative Sound Level',
             config: cfg
         };
@@ -411,7 +442,13 @@
     class VehicleAnalyzer {
         constructor(config) {
             this.config = mergeStoredConfig(Object.assign({}, CONFIG, config || {}));
+            // 気筒数は車両固有の設定なので、reset()（計測開始のたびに呼ばれる）では初期化しない
+            this.cylinders = null;
             this.reset();
+        }
+
+        setCylinders(n) {
+            this.cylinders = (typeof n === 'number' && isFinite(n) && n > 0) ? n : null;
         }
 
         reset() {
@@ -446,6 +483,7 @@
             this.engineTransSeq = 0;
             this.engineTransActiveId = '';
             this.engineTransUntil = 0;
+            this.engineTransConfirmedUntil = 0;
             this.vibLongWin = [];
             this.featureHist = [];
             this.confirmedTransitions = [];
@@ -460,6 +498,11 @@
             this.liveRide = [];
             this.livePt = [];
             this.transitionEvents = [];
+            this.rpmSmoothedHz = null;
+            this.rpmLockedSince = 0;
+            this.rpmLastGoodAt = 0;
+            this.lastVibFreqHz = 0;
+            this.lastVibFreqAt = 0;
         }
 
         setOrientation(orientation) {
@@ -591,6 +634,9 @@
                 next = DRIVING_STATE.ACCELERATION;
             } else if (Math.abs(accel) < cfg.cruiseAccelAbsMps2 && speedStd < cfg.cruiseSpeedStdKmh && current >= 8) {
                 next = DRIVING_STATE.CRUISE;
+            } else if (prev === DRIVING_STATE.CRUISE && current < 8) {
+                // 巡航中に8km/h未満まで下がったら、渋滞クリープ等を巡航として粘着させない
+                next = DRIVING_STATE.DECELERATION;
             } else if (prev === DRIVING_STATE.UNKNOWN || prev === DRIVING_STATE.STOPPED) {
                 next = current >= 22 ? DRIVING_STATE.CRUISE : DRIVING_STATE.ACCELERATION;
             } else {
@@ -606,6 +652,10 @@
         ingestMotion(input) {
             const cfg = this.config;
             const ts = Date.now();
+            if (input.vibFreqHz != null && input.vibFreqHz > 0) {
+                this.lastVibFreqHz = input.vibFreqHz;
+                this.lastVibFreqAt = ts;
+            }
             const linX = input.linX || 0;
             const linY = input.linY || 0;
             const linZ = input.linZ || 0;
@@ -672,7 +722,7 @@
             const vertRms = n ? Math.sqrt(vertSq / n) : 0;
             const longRms = n ? Math.sqrt(longSq / n) : 0;
             const latRms = n ? Math.sqrt(latSq / n) : 0;
-            const shake = n ? Math.sqrt(horizSq / n) : (input.shake || 0);
+            const shake = n ? Math.sqrt(horizSq / n) : 0;
 
             const baselineSamples = [];
             const shortSamples = [];
@@ -713,7 +763,10 @@
                     stillElevated = false;
                 }
             }
-            const spike = (shortRms - baseline) >= cfg.impactDeltaMps2
+            // 車両が停止中（GPSも静止）はスマホの持ち上げ・操作でしか起きない揺れなので、路面インパクトとして扱わない
+            const stationary = this.drivingState === DRIVING_STATE.STOPPED;
+            const spike = !stationary
+                && (shortRms - baseline) >= cfg.impactDeltaMps2
                 && ratio >= cfg.impactRatio
                 && shortPeak >= cfg.impactMinPeakMps2
                 && elevatedMs <= cfg.impactMaxDurationMs;
@@ -727,6 +780,10 @@
                     this.impactSeq += 1;
                     this.impactActiveId = padEventId('IMPACT_', this.impactSeq);
                 }
+            } else if (stationary) {
+                this.impactScore = 0;
+                this.impactHoldUntil = 0;
+                this.impactActiveId = '';
             } else if (ts > this.impactHoldUntil) {
                 this.impactScore *= 0.55;
                 if (this.impactScore < 4) {
@@ -771,7 +828,94 @@
                 aero: bandDb.aero || -100
             });
             this.trim(this.audioWin, ts, this.config.historySec * 1000);
+            if (input.freqDb && input.sampleRate && input.fftSize) {
+                this.updateEngineRpm(ts, input.freqDb, input.sampleRate, input.fftSize, Boolean(input.voice));
+            }
             this.syncSnapshot();
+        }
+
+        // 気筒数が分かっている前提で、音のFFTから発火周波数のピークを探しRPMに換算する。
+        // 4ストローク: 発火周波数[Hz] = RPM / 120 * 気筒数。
+        // ロードノイズ等の広帯域ノイズと区別するため、2倍・3倍音（倍音）が同時に立っているかも見る。
+        updateEngineRpm(ts, freqDb, sampleRate, fftSize, voice) {
+            const cfg = this.config;
+            const DA = A();
+            const s = this.snapshot;
+
+            if (!this.cylinders || voice || this.engineState !== ENGINE_STATE.ON) {
+                s.engineRpm = null;
+                s.engineRpmConfidence = 0;
+                this.rpmSmoothedHz = null;
+                this.rpmLockedSince = 0;
+                return;
+            }
+
+            const loHz = (cfg.rpmMinRpm * this.cylinders) / 120;
+            const hiHz = (cfg.rpmMaxRpm * this.cylinders) / 120;
+            const peak = DA.peakBinInRange(freqDb, sampleRate, fftSize, loHz, hiHz);
+            if (!peak) {
+                if (ts - this.rpmLastGoodAt > cfg.rpmLoseLockMs) {
+                    s.engineRpm = null;
+                    s.engineRpmConfidence = 0;
+                }
+                return;
+            }
+
+            const floor = DA.avgDbInRange(freqDb, sampleRate, fftSize, loHz, hiHz);
+            const prominence = clamp01((peak.db - floor - 3) / 15);
+
+            const harmonicTol = Math.max(peak.hz * 0.08, sampleRate / fftSize);
+            let harmonicsFound = 0;
+            [2, 3].forEach(function (mult) {
+                const target = peak.hz * mult;
+                if (target >= hiHz * 3) {
+                    return;
+                }
+                const h = DA.peakBinInRange(freqDb, sampleRate, fftSize, target - harmonicTol, target + harmonicTol);
+                const hFloor = DA.avgDbInRange(freqDb, sampleRate, fftSize, target - harmonicTol * 3, target + harmonicTol * 3);
+                if (h && (h.db - hFloor) >= 3) {
+                    harmonicsFound += 1;
+                }
+            });
+            const harmonicScore = harmonicsFound / 2;
+
+            // 低回転（アイドリング相当）なら、振動側で別途とっている卓越周波数と一致するかも確認材料にする。
+            // 加速度センサーのサンプリング上限（Nyquist、概ね20〜25Hz）を超える領域では原理的に比較できない。
+            let vibAgreement = 0;
+            if (peak.hz <= 22 && ts - this.lastVibFreqAt <= 1500 && this.lastVibFreqHz > 0) {
+                const diff = Math.abs(this.lastVibFreqHz - peak.hz);
+                if (diff <= Math.max(1.5, peak.hz * 0.15)) {
+                    vibAgreement = 1;
+                }
+            }
+
+            const confidence = clamp01(0.5 * prominence + 0.35 * harmonicScore + 0.15 * vibAgreement);
+            if (confidence < cfg.rpmMinConfidence) {
+                if (ts - this.rpmLastGoodAt > cfg.rpmLoseLockMs) {
+                    s.engineRpm = null;
+                    s.engineRpmConfidence = 0;
+                }
+                return;
+            }
+
+            const withinJump = this.rpmSmoothedHz == null
+                || Math.abs(peak.hz - this.rpmSmoothedHz) <= this.rpmSmoothedHz * cfg.rpmJumpToleranceRatio
+                || ts - this.rpmLastGoodAt > cfg.rpmLoseLockMs;
+            if (!withinJump) {
+                return;
+            }
+
+            this.rpmSmoothedHz = this.rpmSmoothedHz == null
+                ? peak.hz
+                : cfg.rpmSmoothAlpha * peak.hz + (1 - cfg.rpmSmoothAlpha) * this.rpmSmoothedHz;
+            this.rpmLastGoodAt = ts;
+            if (!this.rpmLockedSince) {
+                this.rpmLockedSince = ts;
+            }
+
+            const locked = ts - this.rpmLockedSince >= cfg.rpmLockMs;
+            s.engineRpm = locked ? Math.round((this.rpmSmoothedHz * 120) / this.cylinders) : null;
+            s.engineRpmConfidence = round4(confidence);
         }
 
         tick(now) {
@@ -897,6 +1041,11 @@
                 const kind = this.engineState === ENGINE_STATE.ON ? 'ENG_START_' : 'ENG_STOP_';
                 this.engineTransActiveId = padEventId(kind, this.engineTransSeq);
                 this.engineTransUntil = now + 3500;
+                // tick()はUI描画のたびに呼ばれ得る（最短280ms間隔）が、1秒ごとのCSVサンプルは
+                // buildSample()経由でしか記録されない。検出直後にlastEngineStateを同期すると
+                // 次のtick()で即NONEに戻り、1秒サンプル側がSTATE_CHANGEを取りこぼす。
+                // そのため短時間だけ確定フラグを保持し、直後のサンプルに必ず反映させる。
+                this.engineTransConfirmedUntil = now + 1300;
                 this.openTransitionWindow(now);
             } else if (startCandidate) {
                 transition = POWERTRAIN_TRANSITION.START_CANDIDATE;
@@ -906,6 +1055,10 @@
             this.lastEngineState = this.engineState;
             if (now > this.engineTransUntil) {
                 this.engineTransActiveId = '';
+            }
+            if (!confirmed && now < this.engineTransConfirmedUntil) {
+                transition = POWERTRAIN_TRANSITION.STATE_CHANGE;
+                confirmed = true;
             }
 
             let ev = 0;
@@ -1083,14 +1236,17 @@
                 0,
                 100
             );
+            // Ride Comfortは「道路入力を車体がどう処理したか」の指標。停止中は道路入力が無いため、
+            // スマホの持ち上げ等の手ブレをRideの減点として扱わない（満点＝減点なしとする）
+            const stationary = this.drivingState === DRIVING_STATE.STOPPED;
             const expect = expectedRideLevels(this.filteredSpeed || 0);
             const lfShakeMetric = hypot3(s.shakeScore || 0, Math.abs(this.longAccel) * 0.25, 0);
-            const lfScore = comfortFromExpected(lfShakeMetric, expect.shake);
-            const contScore = comfortFromExpected(s.continuousVibration || 0, expect.vib);
-            const impactComfort = s.impactEvent
+            const lfScore = stationary ? 100 : comfortFromExpected(lfShakeMetric, expect.shake);
+            const contScore = stationary ? 100 : comfortFromExpected(s.continuousVibration || 0, expect.vib);
+            const impactComfort = (!stationary && s.impactEvent)
                 ? clamp(100 - (s.impactScore || 0) * 0.55, 40, 100)
                 : 100;
-            const ride = clamp(
+            const ride = stationary ? 100 : clamp(
                 lfScore * cfg.rideWeightShake
                 + contScore * cfg.rideWeightContinuous
                 + impactComfort * cfg.rideWeightImpact,
@@ -1248,7 +1404,9 @@
                 midFrequencyNoise: s.midFrequencyNoise,
                 highFrequencyNoise: s.highFrequencyNoise,
                 impactEventId: s.impactEventId,
-                engineTransitionId: s.engineTransitionId
+                engineTransitionId: s.engineTransitionId,
+                engineRpm: s.engineRpm,
+                engineRpmConfidence: s.engineRpmConfidence
             };
         }
 
@@ -1486,6 +1644,8 @@
             num(point.highFrequencyNoise, 1),
             cell(point.impactEventId || ''),
             cell(point.engineTransitionId || ''),
+            point.engineRpm == null ? '' : String(point.engineRpm),
+            num(point.engineRpmConfidence, 3),
             cell(point.engineDebug || '')
         ];
     }
@@ -1494,7 +1654,7 @@
         const DA = A();
         const cell = DA && DA.csvCell ? DA.csvCell : String;
         const lines = [
-            `# analysis_model,legacy+vehicle_v1`,
+            `# analysis_model,vehicle_v1`,
             `# quietness_score,${summary.quietnessScore == null ? '' : summary.quietnessScore}`,
             `# ride_comfort_score,${summary.rideComfortScore == null ? '' : summary.rideComfortScore}`,
             `# powertrain_smoothness_score,${summary.powertrainSmoothnessScore == null ? '' : summary.powertrainSmoothnessScore}`
@@ -1557,7 +1717,9 @@
                     break;
                 }
             }
-            const spike = (current - baseline) >= cfg.impactDeltaMps2
+            const stationary = point.drivingState === DRIVING_STATE.STOPPED;
+            const spike = !stationary
+                && (current - baseline) >= cfg.impactDeltaMps2
                 && ratio >= 1.85
                 && current >= cfg.impactMinPeakMps2
                 && elevated <= 1;
@@ -1581,12 +1743,12 @@
             const speed = point.filteredSpeed != null ? point.filteredSpeed : (point.speed || 0);
             const expect = expectedRideLevels(speed);
             const shakeVal = point.shakeScore != null ? point.shakeScore : (point.shake || 0);
-            const lfScore = comfortFromExpected(shakeVal, expect.shake);
-            const contScore = comfortFromExpected(point.continuousVibration || 0, expect.vib);
-            const impactComfort = point.impactEvent ? clamp(100 - point.impactScore * 0.55, 40, 100) : 100;
+            const lfScore = stationary ? 100 : comfortFromExpected(shakeVal, expect.shake);
+            const contScore = stationary ? 100 : comfortFromExpected(point.continuousVibration || 0, expect.vib);
+            const impactComfort = (!stationary && point.impactEvent) ? clamp(100 - point.impactScore * 0.55, 40, 100) : 100;
             point.lowFrequencyShakeScore = lfScore;
             point.continuousVibrationScore = contScore;
-            point.rideComfortScore = Math.round(
+            point.rideComfortScore = stationary ? 100 : Math.round(
                 lfScore * cfg.rideWeightShake
                 + contScore * cfg.rideWeightContinuous
                 + impactComfort * cfg.rideWeightImpact
@@ -1662,6 +1824,7 @@
         serializePoint: serializePoint,
         summaryComments: summaryComments,
         levelFromScore: levelFromScore,
+        comfortLabelFromScore: comfortLabelFromScore,
         rescorePoints: rescorePoints
     };
 })(window);
