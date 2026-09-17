@@ -1015,16 +1015,22 @@
                 && Math.abs(audioDelta) < 2.2
                 && Math.abs(vibrationDelta) < 0.05;
 
-            let engineP = 0.42 * startP + 0.18 * persist + 0.12 * lfRise + 0.12 * powerRise + 0.16 * vibRise;
-            engineP -= 0.55 * stopP;
+            // 既にON確定済みのときは「上昇(rise)が無い」ことをOFFの根拠にしない。
+            // 定常運転はベースラインに吸収されて上昇が消えるため、rise主体の式では
+            // エンジンが回り続けているだけで数秒でOFFへ誤判定してしまう（実測CSVで確認済み）。
+            // ON確定後は「下降(drop)の証拠があるか」だけを見て、無ければON寄りの値を維持する。
+            let engineP;
+            if (this.engineState === ENGINE_STATE.ON) {
+                engineP = 0.82 - 0.55 * stopP - 0.30 * lfDrop - 0.30 * powerDrop;
+            } else {
+                engineP = 0.42 * startP + 0.18 * persist + 0.12 * lfRise + 0.12 * powerRise + 0.16 * vibRise;
+                engineP -= 0.55 * stopP;
+            }
             if (stoppedQuiet) {
                 engineP -= 0.62;
             }
             if (launchContext && startP > 0.42 && persist > 0.35) {
                 engineP += 0.08;
-            }
-            if (this.engineState === ENGINE_STATE.ON) {
-                engineP += 0.06;
             }
             engineP = clamp01(engineP);
 
