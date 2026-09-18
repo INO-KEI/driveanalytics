@@ -980,7 +980,13 @@
             const lfDrop = base && cur ? clamp01(dbDelta(base.lf, cur.lf) / 6) : 0;
             const powerDrop = base && cur ? clamp01(dbDelta(base.power, cur.power) / 6) : 0;
             const vibMixNow = hypot3(vibNow, shakeNow, 0);
-            const vibRise = clamp01((vibMixNow - vibBase) / 0.14);
+            const vibRiseRaw = clamp01((vibMixNow - vibBase) / 0.14);
+            // 発進・急加減速そのものによる車体の縦揺れ（スクワット/ダイブ）は、エンジン始動の
+            // 「ガクッ」という一瞬のショックとは別物。GPS縦加速度で説明がつく分だけ、
+            // エンジン判定への寄与を割り引く（実測でFCEV＝エンジン無しの車でも、急加減速のたびに
+            // vibRiseだけで誤ってENGINE_ONと判定されるのを確認したため）。
+            const motionExplained = clamp01(Math.abs(this.longAccel) / 1.2);
+            const vibRise = vibRiseRaw * (1 - motionExplained);
             const vibDrop = clamp01((vibBase - vibMixNow) / 0.14);
             const audioDelta = base && cur
                 ? 0.55 * dbDelta(cur.lf, base.lf) + 0.45 * dbDelta(cur.power, base.power)
