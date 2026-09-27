@@ -248,6 +248,70 @@
         </div>
     </div>
 
+    <div id="trip-setup-panel" hidden>
+        <div class="settings-card">
+            <div class="settings-head">
+                <h2>計測条件</h2>
+                <button type="button" id="tripSetupClose">キャンセル</button>
+            </div>
+            <section class="settings-section">
+                <p class="hint">車種・条件ごとにデータを蓄積して比較するための情報です。前回の内容が初期値として入っています。</p>
+                <div class="settings-row">
+                    <label for="tripVehicleSelect">車種</label>
+                    <select id="tripVehicleSelect">
+                        <option value="クラウンスポーツ">クラウンスポーツ</option>
+                        <option value="シエンタ">シエンタ</option>
+                        <option value="__other__">その他（自由入力）</option>
+                    </select>
+                </div>
+                <div class="settings-row" id="tripVehicleOtherRow" hidden>
+                    <label for="tripVehicleOther">車種名</label>
+                    <input type="text" id="tripVehicleOther" placeholder="例：ミライ">
+                </div>
+                <div class="settings-row">
+                    <label for="tripPowertrainSelect">動力方式</label>
+                    <select id="tripPowertrainSelect">
+                        <option value="EV">EV</option>
+                        <option value="HV">HV</option>
+                        <option value="ICE">ICE</option>
+                    </select>
+                </div>
+                <div class="settings-row">
+                    <label for="tripRoadTypeSelect">道路種別</label>
+                    <select id="tripRoadTypeSelect">
+                        <option value="市街地">市街地</option>
+                        <option value="郊外">郊外</option>
+                        <option value="山間部">山間部</option>
+                        <option value="高速道路">高速道路</option>
+                    </select>
+                </div>
+                <div class="settings-row">
+                    <label for="tripMicSelect">マイク</label>
+                    <select id="tripMicSelect">
+                        <option value="スマホ本体">スマホ本体</option>
+                        <option value="車載マイク">車載マイク</option>
+                    </select>
+                </div>
+                <div class="settings-row">
+                    <label for="tripDeviceSelect">端末</label>
+                    <select id="tripDeviceSelect">
+                        <option value="iPhone 16e">iPhone 16e</option>
+                        <option value="iPhone SE2">iPhone SE2</option>
+                        <option value="__other__">その他（自由入力）</option>
+                    </select>
+                </div>
+                <div class="settings-row" id="tripDeviceOtherRow" hidden>
+                    <label for="tripDeviceOther">端末名</label>
+                    <input type="text" id="tripDeviceOther" placeholder="例：iPhone 15">
+                </div>
+                <p class="hint">Eco / Normal / Sport（ドライブモード）は計測開始後、地図パネル上部のチップで選べます。</p>
+            </section>
+            <div class="settings-actions">
+                <button type="button" id="tripSetupStart">この条件で計測開始</button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script src="js/app.js"></script>
     <script src="js/analysis.js"></script>

@@ -101,6 +101,7 @@ class SensorManager {
         this.dataListeners = [];
         this.loadCalibration();
         this.loadEngineCylinders();
+        this.loadTripMeta();
         this.bindLifecycle();
     }
 
@@ -912,7 +913,9 @@ class SensorManager {
             comments: this.vehicleSummary && this.vehicleSummary.comments,
             speedBands: this.vehicleSummary && this.vehicleSummary.speedBands,
             eventStats: this.vehicleSummary && this.vehicleSummary.eventStats,
-            vehicle: this.vehicle ? this.vehicle.getSnapshot() : null
+            phaseStats: this.vehicleSummary && this.vehicleSummary.phaseStats,
+            vehicle: this.vehicle ? this.vehicle.getSnapshot() : null,
+            tripMeta: this.getTripMeta()
         };
     }
 
@@ -1221,6 +1224,36 @@ class SensorManager {
 
     getEngineCylinders() {
         return this.vehicle ? this.vehicle.cylinders : null;
+    }
+
+    // 計測条件（車種・動力方式・道路種別・マイク・端末）。走行データを蓄積して
+    // 車種間・条件間で比較するための前提情報で、CSVのメタ情報として書き出す。
+    loadTripMeta() {
+        try {
+            const raw = localStorage.getItem('driveanalytics.tripMeta.v1');
+            this.tripMeta = raw ? JSON.parse(raw) : this.defaultTripMeta();
+        } catch (error) {
+            this.tripMeta = this.defaultTripMeta();
+        }
+    }
+
+    defaultTripMeta() {
+        return {
+            vehicle: 'クラウンスポーツ',
+            powertrain: 'HV',
+            roadType: '市街地',
+            micSource: 'スマホ本体',
+            device: 'iPhone 16e'
+        };
+    }
+
+    setTripMeta(meta) {
+        this.tripMeta = Object.assign({}, this.defaultTripMeta(), this.tripMeta, meta || {});
+        localStorage.setItem('driveanalytics.tripMeta.v1', JSON.stringify(this.tripMeta));
+    }
+
+    getTripMeta() {
+        return Object.assign({}, this.tripMeta);
     }
 
     cancelCalibration() {

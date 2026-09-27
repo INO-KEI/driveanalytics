@@ -547,7 +547,8 @@ button:disabled {
     color: var(--muted);
 }
 
-#settings-panel {
+#settings-panel,
+#trip-setup-panel {
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, 0.72);
@@ -558,7 +559,8 @@ button:disabled {
     padding: 0.75rem;
 }
 
-#settings-panel[hidden] { display: none; }
+#settings-panel[hidden],
+#trip-setup-panel[hidden] { display: none; }
 
 .settings-card {
     width: min(520px, 100%);
@@ -603,14 +605,20 @@ button:disabled {
     gap: 0.5rem;
     margin-top: 0.4rem;
 }
+.settings-row[hidden] { display: none; }
 .settings-row label { font-size: 0.8rem; color: var(--text); }
-select {
+select,
+input[type="text"] {
     background: #1a1208;
     color: var(--text);
     border: 1px solid var(--orange-dim);
     padding: 0.2rem 0.4rem;
     font-family: inherit;
     font-size: 0.8rem;
+}
+.settings-row input[type="text"] {
+    flex: 1;
+    min-width: 0;
 }
 
 @media (min-width: 900px) {

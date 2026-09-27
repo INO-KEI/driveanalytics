@@ -80,6 +80,18 @@ class UIManager {
         this.calClear = document.getElementById('calClear');
         this.pendingCalPeak = null;
         this.cylinderSelect = document.getElementById('cylinderSelect');
+        this.tripSetupPanel = document.getElementById('trip-setup-panel');
+        this.tripSetupClose = document.getElementById('tripSetupClose');
+        this.tripSetupStart = document.getElementById('tripSetupStart');
+        this.tripVehicleSelect = document.getElementById('tripVehicleSelect');
+        this.tripVehicleOtherRow = document.getElementById('tripVehicleOtherRow');
+        this.tripVehicleOther = document.getElementById('tripVehicleOther');
+        this.tripPowertrainSelect = document.getElementById('tripPowertrainSelect');
+        this.tripRoadTypeSelect = document.getElementById('tripRoadTypeSelect');
+        this.tripMicSelect = document.getElementById('tripMicSelect');
+        this.tripDeviceSelect = document.getElementById('tripDeviceSelect');
+        this.tripDeviceOtherRow = document.getElementById('tripDeviceOtherRow');
+        this.tripDeviceOther = document.getElementById('tripDeviceOther');
         this.charts = new NervCharts();
         this.statusTimer = null;
 
@@ -182,19 +194,33 @@ class UIManager {
     }
 
     initEventListeners() {
-        this.startButton.addEventListener('click', async () => {
-            this.startButton.disabled = true;
-            this.stopButton.disabled = false;
-            this.followMap = true;
-            try {
-                await this.sensorManager.startRecording();
-            } catch (error) {
-                this.startButton.disabled = false;
-                this.stopButton.disabled = true;
-                this.showStatus('計測を開始できませんでした。', true);
-                console.error(error);
-            }
+        this.startButton.addEventListener('click', () => {
+            this.openTripSetup();
         });
+
+        if (this.tripSetupClose) {
+            this.tripSetupClose.addEventListener('click', () => this.closeTripSetup());
+        }
+        if (this.tripSetupPanel) {
+            this.tripSetupPanel.addEventListener('click', (event) => {
+                if (event.target === this.tripSetupPanel) {
+                    this.closeTripSetup();
+                }
+            });
+        }
+        if (this.tripVehicleSelect) {
+            this.tripVehicleSelect.addEventListener('change', () => {
+                this.tripVehicleOtherRow.hidden = this.tripVehicleSelect.value !== '__other__';
+            });
+        }
+        if (this.tripDeviceSelect) {
+            this.tripDeviceSelect.addEventListener('change', () => {
+                this.tripDeviceOtherRow.hidden = this.tripDeviceSelect.value !== '__other__';
+            });
+        }
+        if (this.tripSetupStart) {
+            this.tripSetupStart.addEventListener('click', () => this.confirmTripSetupAndStart());
+        }
 
         this.stopButton.addEventListener('click', () => {
             this.sensorManager.stopRecording();
@@ -799,6 +825,74 @@ class UIManager {
         }
     }
 
+    openTripSetup() {
+        if (!this.tripSetupPanel) {
+            this.beginRecording();
+            return;
+        }
+        const meta = this.sensorManager.getTripMeta();
+        const knownVehicles = ['クラウンスポーツ', 'シエンタ'];
+        const knownDevices = ['iPhone 16e', 'iPhone SE2'];
+        if (knownVehicles.includes(meta.vehicle)) {
+            this.tripVehicleSelect.value = meta.vehicle;
+            this.tripVehicleOtherRow.hidden = true;
+        } else {
+            this.tripVehicleSelect.value = '__other__';
+            this.tripVehicleOtherRow.hidden = false;
+            this.tripVehicleOther.value = meta.vehicle || '';
+        }
+        this.tripPowertrainSelect.value = meta.powertrain || 'HV';
+        this.tripRoadTypeSelect.value = meta.roadType || '市街地';
+        this.tripMicSelect.value = meta.micSource || 'スマホ本体';
+        if (knownDevices.includes(meta.device)) {
+            this.tripDeviceSelect.value = meta.device;
+            this.tripDeviceOtherRow.hidden = true;
+        } else {
+            this.tripDeviceSelect.value = '__other__';
+            this.tripDeviceOtherRow.hidden = false;
+            this.tripDeviceOther.value = meta.device || '';
+        }
+        this.tripSetupPanel.hidden = false;
+    }
+
+    closeTripSetup() {
+        if (this.tripSetupPanel) {
+            this.tripSetupPanel.hidden = true;
+        }
+    }
+
+    confirmTripSetupAndStart() {
+        const vehicle = this.tripVehicleSelect.value === '__other__'
+            ? (this.tripVehicleOther.value || '').trim() || 'その他'
+            : this.tripVehicleSelect.value;
+        const device = this.tripDeviceSelect.value === '__other__'
+            ? (this.tripDeviceOther.value || '').trim() || 'その他'
+            : this.tripDeviceSelect.value;
+        this.sensorManager.setTripMeta({
+            vehicle: vehicle,
+            powertrain: this.tripPowertrainSelect.value,
+            roadType: this.tripRoadTypeSelect.value,
+            micSource: this.tripMicSelect.value,
+            device: device
+        });
+        this.closeTripSetup();
+        this.beginRecording();
+    }
+
+    async beginRecording() {
+        this.startButton.disabled = true;
+        this.stopButton.disabled = false;
+        this.followMap = true;
+        try {
+            await this.sensorManager.startRecording();
+        } catch (error) {
+            this.startButton.disabled = false;
+            this.stopButton.disabled = true;
+            this.showStatus('計測を開始できませんでした。', true);
+            console.error(error);
+        }
+    }
+
     renderEngineRpm(vehicle) {
         if (!this.engineRpmElement || this.sensorManager.getEngineCylinders() == null) {
             return;
@@ -930,9 +1024,11 @@ class UIManager {
     }
 
     csvFilename() {
-        const started = this.sensorManager.getSessionSummary().startedAt;
-        const stamp = this.A.formatStamp(started ? new Date(started) : new Date());
-        return `driveanalytics-${stamp}.csv`;
+        const summary = this.sensorManager.getSessionSummary();
+        const stamp = this.A.formatStamp(summary.startedAt ? new Date(summary.startedAt) : new Date());
+        const vehicle = (summary.tripMeta && summary.tripMeta.vehicle) || '';
+        const safeVehicle = vehicle.replace(/[\\/:*?"<>|\s]+/g, '');
+        return safeVehicle ? `driveanalytics-${safeVehicle}-${stamp}.csv` : `driveanalytics-${stamp}.csv`;
     }
 
     buildCsvFile() {

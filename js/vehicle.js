@@ -48,7 +48,14 @@
         rpmLockMs: 900,
         rpmLoseLockMs: 1500,
         rpmMinConfidence: 0.25,
-        rpmJumpToleranceRatio: 0.4
+        rpmJumpToleranceRatio: 0.4,
+        phaseLowSpeedKmh: 30,
+        phaseTurnWindowMs: 6000,
+        phaseTurnDeg: 50,
+        phaseTurnMaxSpeedKmh: 25,
+        phaseCurveWindowMs: 10000,
+        phaseCurveDeg: 20,
+        phaseCurveMinSpeedKmh: 15
     };
 
     function mergeStoredConfig(base) {
@@ -86,6 +93,33 @@
         CRUISE: '定常',
         DECELERATION: '減速',
         UNKNOWN: '--'
+    };
+
+    // GPSの速度・方位変化から見た走行フェーズ。データ蓄積して条件別に比較するための分類。
+    const DRIVE_PHASE = {
+        LOW_SPEED_ACCEL: 'LOW_SPEED_ACCEL',
+        HIGH_SPEED_ACCEL: 'HIGH_SPEED_ACCEL',
+        CRUISE: 'CRUISE',
+        HIGH_SPEED_DECEL: 'HIGH_SPEED_DECEL',
+        LOW_SPEED_DECEL: 'LOW_SPEED_DECEL',
+        INTERSECTION_RIGHT: 'INTERSECTION_RIGHT',
+        INTERSECTION_LEFT: 'INTERSECTION_LEFT',
+        CURVE: 'CURVE',
+        STOPPED: 'STOPPED',
+        NONE: 'NONE'
+    };
+
+    const DRIVE_PHASE_LABEL = {
+        LOW_SPEED_ACCEL: '低速域加速',
+        HIGH_SPEED_ACCEL: '高速域加速',
+        CRUISE: '巡行',
+        HIGH_SPEED_DECEL: '高速域減速',
+        LOW_SPEED_DECEL: '低速域減速',
+        INTERSECTION_RIGHT: '交差点右折',
+        INTERSECTION_LEFT: '交差点左折',
+        CURVE: '左右旋回',
+        STOPPED: '停止',
+        NONE: '--'
     };
 
     const ENGINE_STATE = {
@@ -182,6 +216,7 @@
         'engine_transition_id',
         'engine_rpm',
         'engine_rpm_confidence',
+        'drive_phase',
         'engine_debug'
     ];
 
@@ -434,6 +469,7 @@
             },
             engineRpm: null,
             engineRpmConfidence: 0,
+            drivePhase: DRIVE_PHASE.NONE,
             soundLabel: 'Relative Sound Level',
             config: cfg
         };
@@ -464,6 +500,7 @@
             this.longAccel = 0;
             this.orientation = null;
             this.heading = null;
+            this.headingHist = [];
             this.drivingState = DRIVING_STATE.UNKNOWN;
             this.launchUntil = 0;
             this.stateSince = 0;
@@ -585,7 +622,13 @@
                 this.longAccel *= 0.5;
             }
 
+            if (valid && this.heading != null && isFinite(this.heading)) {
+                this.headingHist.push({ t: ts, heading: this.heading });
+                this.trim(this.headingHist, ts, Math.max(cfg.phaseTurnWindowMs, cfg.phaseCurveWindowMs) + 1000);
+            }
+
             this.updateDrivingState(ts);
+            this.updateDrivePhase(ts);
             this.syncSnapshot();
             return {
                 gpsValid: this.gpsValid,
@@ -647,6 +690,44 @@
                 this.stateSince = ts;
             }
             this.drivingState = next;
+        }
+
+        // GPSの方位変化から交差点の右左折・カーブを見分け、それ以外は速度帯別の加速/減速/巡行にする。
+        // 閾値（角度・時間窓・速度）は初期値。deta/に走行データが溜まったら実測に合わせて調整する前提。
+        updateDrivePhase(ts) {
+            const cfg = this.config;
+            const DA = A();
+            const speed = this.haveFiltered ? this.filteredSpeed : 0;
+
+            const turnWindow = this.headingHist.filter(function (h) { return ts - h.t <= cfg.phaseTurnWindowMs; });
+            const curveWindow = this.headingHist.filter(function (h) { return ts - h.t <= cfg.phaseCurveWindowMs; });
+            const cumulativeDelta = function (list) {
+                let sum = 0;
+                for (let i = 1; i < list.length; i++) {
+                    sum += DA.wrapHeadingDelta(list[i - 1].heading, list[i].heading);
+                }
+                return sum;
+            };
+            const turnDelta = cumulativeDelta(turnWindow);
+            const curveDelta = cumulativeDelta(curveWindow);
+
+            let phase;
+            if (this.drivingState === DRIVING_STATE.STOPPED) {
+                phase = DRIVE_PHASE.STOPPED;
+            } else if (Math.abs(turnDelta) >= cfg.phaseTurnDeg && speed <= cfg.phaseTurnMaxSpeedKmh) {
+                phase = turnDelta > 0 ? DRIVE_PHASE.INTERSECTION_RIGHT : DRIVE_PHASE.INTERSECTION_LEFT;
+            } else if (Math.abs(curveDelta) >= cfg.phaseCurveDeg && speed >= cfg.phaseCurveMinSpeedKmh) {
+                phase = DRIVE_PHASE.CURVE;
+            } else if (this.drivingState === DRIVING_STATE.ACCELERATION || this.drivingState === DRIVING_STATE.LAUNCH) {
+                phase = speed < cfg.phaseLowSpeedKmh ? DRIVE_PHASE.LOW_SPEED_ACCEL : DRIVE_PHASE.HIGH_SPEED_ACCEL;
+            } else if (this.drivingState === DRIVING_STATE.DECELERATION) {
+                phase = speed < cfg.phaseLowSpeedKmh ? DRIVE_PHASE.LOW_SPEED_DECEL : DRIVE_PHASE.HIGH_SPEED_DECEL;
+            } else if (this.drivingState === DRIVING_STATE.CRUISE) {
+                phase = DRIVE_PHASE.CRUISE;
+            } else {
+                phase = DRIVE_PHASE.NONE;
+            }
+            this.snapshot.drivePhase = phase;
         }
 
         ingestMotion(input) {
@@ -1418,7 +1499,8 @@
                 impactEventId: s.impactEventId,
                 engineTransitionId: s.engineTransitionId,
                 engineRpm: s.engineRpm,
-                engineRpmConfidence: s.engineRpmConfidence
+                engineRpmConfidence: s.engineRpmConfidence,
+                drivePhase: s.drivePhase
             };
         }
 
@@ -1593,6 +1675,9 @@
             eventStats: aggregate(points, function (p) {
                 return p.drivingState || DRIVING_STATE.UNKNOWN;
             }),
+            phaseStats: aggregate(points, function (p) {
+                return p.drivePhase || DRIVE_PHASE.NONE;
+            }),
             transitionCount: transitions,
             lowSpeedTransitionCount: lowSpeedTrans
         };
@@ -1658,6 +1743,7 @@
             cell(point.engineTransitionId || ''),
             point.engineRpm == null ? '' : String(point.engineRpm),
             num(point.engineRpmConfidence, 3),
+            cell(point.drivePhase || ''),
             cell(point.engineDebug || '')
         ];
     }
@@ -1666,11 +1752,19 @@
         const DA = A();
         const cell = DA && DA.csvCell ? DA.csvCell : String;
         const lines = [
-            `# analysis_model,vehicle_v1`,
-            `# quietness_score,${summary.quietnessScore == null ? '' : summary.quietnessScore}`,
-            `# ride_comfort_score,${summary.rideComfortScore == null ? '' : summary.rideComfortScore}`,
-            `# powertrain_smoothness_score,${summary.powertrainSmoothnessScore == null ? '' : summary.powertrainSmoothnessScore}`
+            `# analysis_model,vehicle_v1`
         ];
+        if (summary.tripMeta) {
+            const m = summary.tripMeta;
+            lines.push(`# vehicle,${cell(m.vehicle || '')}`);
+            lines.push(`# powertrain,${cell(m.powertrain || '')}`);
+            lines.push(`# road_type,${cell(m.roadType || '')}`);
+            lines.push(`# mic_source,${cell(m.micSource || '')}`);
+            lines.push(`# device,${cell(m.device || '')}`);
+        }
+        lines.push(`# quietness_score,${summary.quietnessScore == null ? '' : summary.quietnessScore}`);
+        lines.push(`# ride_comfort_score,${summary.rideComfortScore == null ? '' : summary.rideComfortScore}`);
+        lines.push(`# powertrain_smoothness_score,${summary.powertrainSmoothnessScore == null ? '' : summary.powertrainSmoothnessScore}`);
         if (character) {
             lines.push(`# low_speed_shake,${cell(character.lowSpeedShake)}`);
             lines.push(`# cruising_stability,${cell(character.cruisingStability)}`);
@@ -1695,6 +1789,14 @@
             summary.eventStats.forEach(function (ev) {
                 lines.push(
                     `# event_band,${ev.id},n=${ev.count},vibration=${ev.vibration.toFixed(3)},shake=${ev.shake.toFixed(3)},transitions=${ev.powertrainTransition}`
+                );
+            });
+        }
+        if (summary.phaseStats) {
+            summary.phaseStats.forEach(function (ph) {
+                const label = DRIVE_PHASE_LABEL[ph.id] || ph.id;
+                lines.push(
+                    `# phase_band,${ph.id},${cell(label)},n=${ph.count},vibration=${ph.vibration.toFixed(3)},shake=${ph.shake.toFixed(3)},transitions=${ph.powertrainTransition}`
                 );
             });
         }
@@ -1826,6 +1928,8 @@
         CONFIG: CONFIG,
         DRIVING_STATE: DRIVING_STATE,
         DRIVING_STATE_LABEL: DRIVING_STATE_LABEL,
+        DRIVE_PHASE: DRIVE_PHASE,
+        DRIVE_PHASE_LABEL: DRIVE_PHASE_LABEL,
         ENGINE_STATE: ENGINE_STATE,
         POWERTRAIN_TRANSITION: POWERTRAIN_TRANSITION,
         SPEED_BANDS: SPEED_BANDS,
